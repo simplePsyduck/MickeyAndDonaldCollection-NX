@@ -16,8 +16,14 @@ Settings::Settings() { reset_keys(); }
 void Settings::reset_keys() {
     const int p1[ACT_COUNT] = {VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, 'Z', 'X', 'C', VK_RETURN};
     const int p2[ACT_COUNT] = {'I', 'K', 'J', 'L', 'U', 'O', 'P', VK_BACK};
+#ifdef __SWITCH__
+    // Pad buttons carry the Nintendo labels here (input_switch.cpp): Genesis A / B / C on Y / B / A, the three
+    // buttons in a row on the controller's left, bottom and right, as the Genesis-classics collections do.
+    const uint32_t pad[ACT_COUNT] = {PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT, PAD_Y, PAD_B, PAD_A, PAD_START};
+#else
     // Genesis-classics style layout: X = A, A = B, B = C.
     const uint32_t pad[ACT_COUNT] = {PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT, PAD_X, PAD_A, PAD_B, PAD_START};
+#endif
     for (int i = 0; i < ACT_COUNT; i++) {
         keys[0][i] = p1[i];
         keys[1][i] = p2[i];

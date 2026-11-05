@@ -92,6 +92,8 @@ void App::draw_launcher() {
     ty0 += video_.line_height(FontId::Huge, tscale);
 #ifdef __ANDROID__
     const char* edition = "Android Edition";
+#elif defined(__SWITCH__)
+    const char* edition = "Switch Edition";
 #else
     const char* edition = "PC Edition";
 #endif
@@ -155,6 +157,9 @@ void App::draw_launcher() {
 #ifdef __ANDROID__
                 lines.push_back("Tap Add ROMs and choose");
                 lines.push_back(g.module->rom_hint());
+#elif defined(__SWITCH__)
+                lines.push_back(std::string("Copy ") + g.module->rom_hint());
+                lines.push_back("to sdmc:/switch/MickeyDonald_nx/roms");
 #else
                 lines.push_back(std::string("Place ") + g.module->rom_hint());
                 lines.push_back("in the game folder or a \"roms\" folder");
@@ -222,6 +227,8 @@ void App::draw_launcher() {
 #ifdef __ANDROID__
     const char* hint = touch_active_ ? "Tap a game to play    Add ROMs to choose your ROM files"
                                      : "\xE2\x86\x90\xE2\x86\x92 Choose    (A) Play    Back Quit";
+#elif defined(__SWITCH__)
+    const char* hint = "\xE2\x86\x90\xE2\x86\x92 Choose    (A) Play    (B) Quit";
 #else
     const char* hint = "\xE2\x86\x90\xE2\x86\x92 Choose    Enter / (A) Play    F11 Fullscreen    Esc Quit";
 #endif
