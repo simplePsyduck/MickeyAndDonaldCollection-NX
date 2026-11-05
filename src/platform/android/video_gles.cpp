@@ -1,11 +1,17 @@
 // OpenGL ES 3.0 presentation layer for Android (see video.h); the same drawing model as the Direct3D 11 one in
 // video.cpp: the game frame with its filters, then batched overlay quads (rects, rounded rects, text).
-// UI glyphs are rendered by Android's own text engine (MDActivity.renderGlyphs, through JNI) into one atlas.
+// UI glyphs are rendered into one atlas: by Android's own text engine (MDActivity.renderGlyphs, through JNI), or
+// on the Nintendo Switch by FreeType over the console's system fonts (platform/switch/glyphs_ft.cpp).
 #include "../video.h"
 #include <SDL.h>
 #include <GLES3/gl3.h>
+#ifdef __ANDROID__
 #include <jni.h>
 #include <android/log.h>
+#else
+#include "../switch/glyphs_ft.h"
+#include <cstdio>
+#endif
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -175,7 +181,11 @@ uint32_t next_cp(const char*& p, const char* end) {
     return cp;
 }
 
+#ifdef __ANDROID__
 void log_error(const char* msg) { __android_log_print(ANDROID_LOG_ERROR, "MickeyDonald", "%s", msg); }
+#else
+void log_error(const char* msg) { fprintf(stderr, "MickeyDonald: %s\n", msg); }
+#endif
 
 GLuint compile(GLenum type, const std::string& src) {
     GLuint s = glCreateShader(type);
@@ -322,6 +332,12 @@ struct Video::Impl {
     // ---- fonts -----------------------------------------------------------------
     int font_base() const { return std::min(h, w * 3 / 4); }
 
+#ifndef __ANDROID__
+    // The glyphs of one font from the platform's system fonts (FreeType); returns false if there are none.
+    bool render_font(const std::vector<uint32_t>& cps, float px, bool bold, std::vector<int>& meta, std::vector<uint8_t>& bits) {
+        return ft_render_glyphs(switch_system_fonts(), cps, px, bold, meta, bits);
+    }
+#else
     // Asks MDActivity.renderGlyphs for one font's glyphs; returns false if Java isn't reachable.
     bool render_font(const std::vector<uint32_t>& cps, float px, bool bold, std::vector<int>& meta, std::vector<uint8_t>& bits) {
         JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
@@ -353,6 +369,7 @@ struct Video::Impl {
         env->DeleteLocalRef(act);
         return ok;
     }
+#endif
 
     void build_fonts() {
         fonts_dirty = false;
