@@ -1,6 +1,6 @@
 # Mickey & Donald Collection — Switch Port
 
-A homebrew Nintendo Switch port of three Sega Mega Drive / Genesis classics, with a launcher, widescreen up to 21:9,
+A homebrew Nintendo Switch port of three Sega Mega Drive / Genesis classics, with a launcher, widescreen 16:9,
 modern display options, gamepad support, cheats, level select, save states, fast forward / rewind and a
 music player: Adapted from Darhkfox's [PC & Android Port](https://github.com/Darhkfox/MickeyAndDonaldCollection)
 
