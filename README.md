@@ -1,8 +1,8 @@
-# Mickey & Donald Collection — PC Edition
+# Mickey & Donald Collection — Switch Port
 
-A Windows port of three Sega Mega Drive / Genesis classics, with a launcher, widescreen up to 21:9,
+A homebrew Nintendo Switch port of three Sega Mega Drive / Genesis classics, with a launcher, widescreen up to 21:9,
 modern display options, gamepad support, cheats, level select, save states, fast forward / rewind and a
-music player:
+music player: Adapted from Darhkfox's [PC & Android Port](https://github.com/Darhkfox/MickeyAndDonaldCollection)
 
 - **Castle of Illusion Starring Mickey Mouse** (1990) — 1 player
 - **QuackShot Starring Donald Duck** (1991) — 1 player
@@ -14,9 +14,9 @@ originals, then adds game-specific patches and a PC frontend.
 
 ## Getting started
 
-1. Download the zip from the [latest release](https://github.com/Darhkfox/MickeyAndDonaldCollection/releases/latest) and unzip the `Mickey and Donald Collection` folder anywhere
-   (nothing needs installing: one self-contained `DisneyClassics.exe`).
-2. Put the ROMs next to `DisneyClassics.exe`, or in a `roms` folder beside it:
+1. Download the zip from the [latest release](https://github.com/simplePsyduck/MickeyAndDonaldCollection-NX/releases/latest) and unzip the `switch` folder to the root of your switch SD card.
+   (The .nro should be in SD:\switch\MickeyDonald_nx\MickeyDonald_nx.nro).
+2. Put your ROMs in SD:\switch\MickeyDonald_nx\roms & MD+ audio pack folders in the "\soundtracks" folder
 
    | Game | Expected dump | Size | CRC32 |
    |---|---|---|---|
@@ -24,7 +24,7 @@ originals, then adds game-specific patches and a PC frontend.
    | QuackShot | `Quack Shot Starring Donald Duck (JUE) (REV 00) [!].bin` | 512 KB | `88C8DD94` |
    | World of Illusion | `World of Illusion Starring Mickey Mouse and Donald Duck (U) [!].bin` | 1 MB | `921EBD1C` |
 
-3. Run `DisneyClassics.exe`. The first launch opens fullscreen; F11 or Alt+Enter switches to a window.
+3. Run using the homebrew launcher with title override by holding R while launching a game. Additional files created on launch.
 
 ROMs are found by their contents (CRC32), so file names don't matter. Raw `.bin` / `.md` / `.gen` dumps,
 interleaved `.smd` dumps, dumps with a 512-byte copier header and all of these inside a `.zip` work. ROMs
@@ -36,21 +36,7 @@ shows *ROM not found* on its card, with the file it needs. Any other dump of the
 the ROM's internal header, and the card says what it is instead: the European or Japanese version, another
 revision (REV 01), or a modified copy / bad dump. The other games still work.
 
-To start a game directly, give `DisneyClassics.exe` the argument `--game coi`, `--game qs` or `--game woi`
-(e.g. in a shortcut).
-
-**On Android** (64-bit phones and tablets, Android 6.0 or later):
-1. Download the APK from the Releases page and open it on your phone. Android asks you to allow installing
-   apps from your browser or file manager the first time.
-2. Copy your ROMs (or a zip of them) to the phone.
-3. Start the app and tap **Add ROMs**. Pick the files (several at once is fine); they are copied into the app,
-   so you only do this once.
-
-The games are played with on-screen touch controls: a D-pad, A / B / C, Start, Menu, and fast forward /
-rewind when those are switched on. A Bluetooth or USB controller works too (Xbox, PlayStation, Switch and most
-others, by button position), and hides them; the Back gesture or button opens the pause menu. Menus, the
-launcher and the music player work by tapping and dragging. The first start picks the widest widescreen mode
-that fits the screen (2:1 on most phones).
+The games are played with a 2 switch joycon or a pro controller. Single joycon input are not yet supported or tested.
 
 ## Features
 
@@ -59,9 +45,7 @@ that fits the screen (2:1 on most phones).
   Credits.
 
 **Widescreen**
-- 16:10 (360×224), 16:9 (400×224), 2:1 (448×224) and 21:9 ultrawide (536×224, fills 3440×1440 and
-  2560×1080 screens) for Castle of Illusion and QuackShot; World of Illusion goes up to 2:1. The in-game
-  menu only offers the widths the running game supports.
+- 16:9 (400×224), The in-game menu only offers the widths the running game supports.
 - More of each level is really drawn at the sides: every game is patched so enemies and items spawn, move
   and are drawn across the whole width, instead of popping in at the edges of the old 320-pixel screen.
   Where the view reaches past the columns the console's 512-pixel background layers hold (21:9, and 2:1 in
@@ -76,13 +60,11 @@ that fits the screen (2:1 on most phones).
   frame where the CPU isn't inside code that changes, and save states remember the width they were made at.
 
 **Video**
-- Borderless fullscreen or windowed, monitor selection (by name; dragging the window to another screen
-  selects it), window size 1×–6×, integer scaling, square / CRT (4:3) pixels or stretch.
-- Filters: nearest, sharp bilinear, bilinear, scanlines, CRT. Direct3D 11.
+- Fullscreen with integer scaling, square / CRT (4:3) pixels or stretch.
+- Filters: nearest, sharp bilinear, bilinear, scanlines, CRT.
 - Sprite flicker removal (no sprites-per-line limit), V-Sync, FPS counter.
 - Black frame insertion for sharper motion, like a CRT: on a 120, 180 or 240 Hz display each game frame is
-  followed by black refreshes (the picture gets darker; 144 / 165 Hz can't line up with 60 fps, so set
-  the display to 120 Hz). On phones it asks for 120 Hz.
+  followed by black refreshes
 
 **Colours**
 - Profiles: Accurate (measured Mega Drive output levels), Linear, Vivid, Warm CRT, Cool, Grayscale, Sepia,
@@ -96,9 +78,7 @@ that fits the screen (2:1 on most phones).
 - Castle of Illusion and QuackShot can play fan-made MD+ soundtrack packs (made for the MegaSD and Mega
   EverDrive Pro): a ROM patch, a `.cue` sheet and the music as WAV files. Like the ROMs, packs aren't
   included: you supply them.
-- Windows: drop the pack's folder, as downloaded, into a `soundtracks` folder next to `DisneyClassics.exe`.
-  Android: *Options → Audio → Add Soundtrack…* and pick the pack's folder (it is copied into the app).
-  The folder's name doesn't matter: the patch says which game it is for.
+- Drop MD+ soundtack files into SD:\switch\MickeyDonald_nx\soundtracks
 - Choose it per game under *Options → Audio → Soundtracks*; it starts with the game (or *Reset Game*). The
   patch is applied in memory (the ROM file is never changed), the game's sound effects stay the console's,
   and save states remember the track and where it was. *Soundtrack Volume* sets its level. Widescreen,
@@ -145,8 +125,7 @@ that fits the screen (2:1 on most phones).
 
 **Other**
 - Two players in World of Illusion: a second gamepad, or a second set of keyboard keys.
-- Keyboard and gamepads: Xbox-compatible pads (XInput) and other USB pads (DirectInput), fully rebindable
-  for both players, hot-plugging.
+- Not yet tested on switch, will work on later.
 - 5 save-state slots per game (F5 / F9), fast forward (hold Tab or the right trigger, 4×), rewind (hold R
   or the left trigger, up to the last minute of play), screenshots (F12). Fast forward and rewind can each
   be switched off, and are only available while achievements are off.
@@ -154,16 +133,16 @@ that fits the screen (2:1 on most phones).
 
 ## Default controls
 
-| Mega Drive | Keyboard (P1) | Keyboard (P2, World of Illusion) | Xbox pad |
+| Mega Drive | Keyboard (P1) | Keyboard (P2, World of Illusion) | Switch |
 |---|---|---|---|
 | D-Pad | Arrow keys | I J K L | D-Pad / left stick |
-| A | Z | U | X |
-| B | X | O | A |
-| C | C | P | B |
-| Start | Enter | Backspace | Start |
-| Pause menu | Esc | | Back / View |
-| Fast forward (hold) | Tab | | Right trigger |
-| Rewind (hold) | R | | Left trigger |
+| A | Z | U | Y |
+| B | X | O | B |
+| C | C | P | A |
+| Start | Enter | Backspace | + |
+| Pause menu | Esc | | - |
+| Fast forward (hold) | Tab | | ZR |
+| Rewind (hold) | R | | ZL |
 
 | Shortcut | Keyboard |
 |---|---|
@@ -187,49 +166,8 @@ folder isn't writable. Delete `settings.ini` to restore the defaults.
 
 ## Building from source
 
-Requirements: Windows 10/11, Visual Studio 2022 (or the Build Tools) with the C++ workload, CMake 3.20+.
-The Windows build has no third-party dependencies.
-
-```
-build.bat                                         :: builds build\bin\DisneyClassics.exe (Release, static CRT)
-package.bat                                       :: dist\Mickey and Donald Collection: the exe, per-game
-                                                  ::   shortcuts and the ROMs in this folder, for local play
-powershell -ExecutionPolicy Bypass -File release.ps1
-                                                  :: dist\Mickey-and-Donald-Collection-v<version>-win64.zip:
-                                                  ::   the exe and readme.txt only (no ROMs)
-```
-
-### Android
-
-The same code builds for Android (`android/`), with SDL2 2.32.10 compiled from source for the window, sound
-and controllers. You need the Android SDK with NDK 28.2 and CMake 3.31.6 (both from the SDK manager) and JDK
-17–21 for Gradle.
-
-```
-powershell android\fetch_sdl.ps1
-cd android
-gradlew assembleDebug
-```
-
-The APK ends up in `android/app/build/outputs/apk/`. Release builds are signed when `android/keystore.properties`
-(`storeFile`, `storePassword`, `keyAlias`, `keyPassword`) and its keystore are present; both stay out of git.
-A log line every 5 seconds gives the frame rate and the work per frame (`adb logcat | findstr fps`).
-
-### Source layout
-
-| Path | Contents |
-|---|---|
-| `src/core/` | Mega Drive hardware: 68000, Z80, VDP (with widescreen rendering: wider line buffer, 10-bit sprite X, per-line hooks), YM2612, SN76489, save states |
-| `src/game/` | Per-game modules (`coi.cpp`, `qs.cpp`, `woi.cpp`): ROM patches, widescreen rules, HUD layout, edge masks, cheats, level select, sound lists; `common.cpp` applies patch lists |
-| `src/app/` | Launcher, sessions, menus, music player / sound test, rewind, settings, ROM finder (`romfind.cpp`, `unzip.cpp`), PNG writer, touch controls (`touch.cpp`); per platform: `app_win.cpp` / `app_android.cpp` (window, main loop) and `sys_win.cpp` / `sys_android.cpp` (files, folders, links) |
-| `src/platform/` | Windows: Direct3D 11 video and DirectWrite UI text, XAudio2 audio, keyboard / XInput / DirectInput input. `android/`: OpenGL ES 3.0 video (the same filters as GLSL; UI text from Android's own fonts), SDL audio and controllers |
-| `android/` | Gradle project; `MDActivity.java` adds the ROM picker and the UI font rasteriser to SDL's activity |
-| `src/tools/mdtool.cpp`, `tools/mdt.py` | Headless core as a DLL with a Python wrapper, used for all the reverse engineering and testing |
-| `tools/m68dis.py` | 68000 disassembler (capstone) used during development |
-| `tools/re/` | Reverse-engineering scripts behind the notes in `docs/` |
-| `tools/trailer/` | Bot-played, headless trailer-footage pipeline |
-| `tests/` | Unit tests for the CPU cores, sound chips and platform layer |
-| `docs/` | Reverse-engineering notes per game (`re_*_game.md`: logic, levels, cheats, sound; `re_*_wide.md`: widescreen) and `TOOLS.md` |
+Requirements: DevKitPro & MSYS2 on windows
+navigate to the switch subfolder and then use "make" in MSYS2 to build the .nro. There are currently some errors during building but the .nro files should build and function regardless. Will iron out the issues later.
 
 ### Technical notes
 
@@ -292,15 +230,17 @@ A log line every 5 seconds gives the frame rate and the work per frame (`adb log
   game's own debug exit does the same); switch it off in open air.
 - Pits and scripted deaths still cost a life with invincibility on (use infinite lives / tries too).
 - Save states made by a newer version may not load in an older one.
+- Switch port launcher audio is choppy & settings applied in game do not retain after a relaunch
 
 ## Credits and licences
 
-- PC port by Darhkfox — [YouTube](https://www.youtube.com/adhgaming) ·
+- PC & Android port by Darhkfox — [YouTube](https://www.youtube.com/adhgaming) ·
   [Reddit u/Darhkwing](https://www.reddit.com/user/Darhkwing) · [GitHub](https://github.com/Darhkfox).
+  Switch port adapted by [simplePsyduck](https://www.simplepsyduck.com)
 - The port's own code is released under the MIT licence (`LICENSE`). The Mega Drive core is written from
   scratch. UI text uses the system font (Segoe UI through DirectWrite on Windows, Android's own font on
   Android).
-- The Android build uses SDL2 by Sam Lantinga and contributors, zlib licence (fetched by
+- The Android & Switch build uses SDL2 by Sam Lantinga and contributors, zlib licence (fetched by
   `android/fetch_sdl.ps1`, not stored in this repository).
 - *Castle of Illusion*, *QuackShot* and *World of Illusion* © 1990–1992 Sega. Mickey Mouse and Donald Duck
   © Disney. This project contains no ROM data. It is an unofficial fan project, not affiliated with or
