@@ -78,3 +78,10 @@ soundtracks/
 *.cue
 *.bps
 *.ips
+
+# Nintendo Switch build
+switch/build/
+switch/*.nro
+switch/*.nacp
+switch/*.elf
+switch/*.map
