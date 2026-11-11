@@ -28,6 +28,14 @@ struct CheatEntry {
     std::vector<std::string> excludes;   // cheats switched off when this one is switched on (they don't work together)
 };
 
+// One release of a game the module can run (QuackShot: REV 00 and REV 01 are both supported). A game's first variant is
+// its primary one: the launcher's preview and the Music Player use it unless the player picked another.
+struct RomVariant {
+    uint32_t crc = 0, size = 0;
+    std::string label;      // "REV 00" (empty when the game has a single release)
+    std::string hint;       // expected file description for messages: "the QuackShot (World REV 00) ROM"
+};
+
 struct GameConfig {
     int  ext = 0;                        // widescreen: extra pixels on each side (0, 20, 40)
     bool hud_anchor = true;              // move HUD elements to the screen edges in widescreen
@@ -52,6 +60,7 @@ struct AchievementDef {
     const char* id;          // stable id stored in achievements.ini ("coi_timber")
     const char* name;
     const char* desc;
+    bool secret = false;     // shown as "???" until earned
     int target = 0;          // counted achievements: the count to reach (shown as progress), else 0
     bool set = false;        // the progress is a set of things found (bits; shown as how many), see AchievementCtx::marked
 };
@@ -99,6 +108,11 @@ public:
     virtual uint32_t    rom_crc32() const = 0;
     virtual uint32_t    rom_size() const = 0;
     virtual const char* rom_hint() const = 0;    // expected file description for error messages
+    // The releases that can be played (rom_crc32() / rom_size() / rom_hint() describe the first). Most games have one.
+    virtual std::vector<RomVariant> rom_variants() const { return {{rom_crc32(), rom_size(), "", rom_hint()}}; }
+    // What names a save state's game: id(), plus the release when its states can't be shared with another one (a state
+    // holds RAM and CPU state, which only fits the code that made it). `md` runs the release in question.
+    virtual std::string state_id(const MegaDrive& md) const { (void)md; return id(); }
     // Header names that mark any version of the game (RomSpec::names), to tell a wrong version from none
     virtual const char* rom_names() const = 0;
     virtual uint32_t    accent_color() const = 0; // UI theme colour 0xAARRGGBB
