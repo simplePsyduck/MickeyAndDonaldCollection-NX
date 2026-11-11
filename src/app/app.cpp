@@ -18,13 +18,13 @@ static Settings preview_settings(const Settings& s) {
     Settings p = s;
     p.widescreen = WideMode::Off;
     p.cheats.clear();
+    p.cpu_overclock = 100;   // (the previews stay stock: three machines run at once)
     p.volume = s.volume * 55 / 100;
     return p;
 }
 
 void App::apply_settings() {
     video_.set_vsync(settings_.vsync);
-    apply_slang();
     if (session_) session_->apply_settings(settings_);
     for (auto& g : games_)
         if (g.preview) g.preview->apply_settings(preview_settings(settings_));
@@ -44,28 +44,6 @@ std::string App::black_frames_note() {
     if (per >= 2 && std::fabs(refresh - per * kEmuFps) < per * 1.0) snprintf(buf, sizeof(buf), "%.0f Hz", refresh);
     else snprintf(buf, sizeof(buf), "needs 120 Hz (now %.0f)", refresh);
     return buf;
-}
-
-// High frame rate: on a 100 Hz or faster display, as many pictures per game frame as it has refreshes (2 at 120 Hz,
-// 3 at 144 / 165 / 180 Hz, 4 at 240 Hz): the frame and in-betweens. Windows; not with black frame insertion.
-int App::hfr_sub_frames() {
-#ifdef __ANDROID__
-    return 1;
-#else
-    if (!settings_.high_frame_rate || settings_.black_frames) return 1;
-    const double hz = refresh_rate();
-    if (hz < 89) return 1;
-    return std::clamp((int)std::lround(hz / kEmuFps + 0.25), 2, VDP::kMaxSubFrames);
-#endif
-}
-
-std::string App::high_frame_rate_note() {
-    if (!settings_.high_frame_rate) return "";
-    if (settings_.black_frames) return "off with Black Frame Insertion";
-    const double hz = refresh_rate();
-    if (hz < 89) return "needs 100 Hz (now " + std::to_string((int)std::lround(hz)) + ")";
-    const int n = hfr_sub_frames() - 1;
-    return std::to_string((int)std::lround(hz)) + " Hz, " + std::to_string(n) + " in-between" + (n == 1 ? "" : "s");
 }
 
 uint32_t App::accent() const {
@@ -277,13 +255,9 @@ void App::frame(double dt) {
     // Phones often run at 120 Hz: there each game frame is shown for exactly two refreshes (refresh_rate() is
     // measured there, so a phone that drops to 60 Hz or 90 Hz is followed).
     const int per = std::max(1, (int)std::lround(refresh / kEmuFps));
-    hfr_subs_ = 1;
 #else
-    // High frame rate: in-between pictures while a game plays (not in fast forward, rewind or a recording).
-    hfr_subs_ = mode_ == Mode::Playing && session_ && !jukebox_.active() && !fast_forward_ && !rewinding_ && !recording_
-                    ? hfr_sub_frames() : 1;
-    // (and at 120 / 180 / 240 Hz for black frame insertion and the high frame rate)
-    const int per = settings_.black_frames || hfr_subs_ > 1 ? std::max(1, (int)std::lround(refresh / kEmuFps)) : 1;
+    // (and at 120 / 180 / 240 Hz for black frame insertion)
+    const int per = settings_.black_frames ? std::max(1, (int)std::lround(refresh / kEmuFps)) : 1;
 #endif
     const bool locked = settings_.vsync && std::fabs(refresh - per * kEmuFps) < per * 1.0;
     const int phase = locked ? (int)(++vsync_phase_ % per) : 0;
@@ -300,18 +274,6 @@ void App::frame(double dt) {
         frame_acc_ -= frames;
         frames = std::min(frames, fast_forward_ ? 12 : 3);
     }
-    // The picture this refresh shows, a frame late (the frame itself last, its in-betweens on the refreshes before):
-    // locked to the display, the counted refreshes; else the middle of this refresh's stretch of game time (the
-    // steadiest steps: at 100 Hz the next refresh's own moment would mostly lie past the newest frame); with V-Sync
-    // off a pass is 1 / K of a frame (app_win paces them).
-    hfr_pick_ = 0;
-    if (hfr_subs_ > 1 && !menu_.active()) {
-        const double t = locked ? (phase + 1.0) / per
-                         : settings_.vsync ? frame_acc_ + 0.5 * kEmuFps / refresh : frame_acc_ + 1.0 / hfr_subs_;
-        const int k = std::clamp((int)std::lround(t * hfr_subs_), 1, hfr_subs_);
-        hfr_pick_ = k < hfr_subs_ ? k : 0;
-    }
-    if (session_) session_->set_sub_frames(hfr_subs_);
 
     // Audio rate control: keep ~50 ms queued.
     const double target = 48000 * 0.05;
@@ -380,7 +342,7 @@ void App::frame(double dt) {
         jukebox_.hint_fade_ = menu_.toast_cover();
         jukebox_.draw(video_, (float)time_, jukebox_.module()->accent_color());
     } else if (mode_ == Mode::Playing && session_) {
-        draw_game_view(0, *session_, {0, 0, W, H}, 1.0f, 0.0f, hfr_pick_);
+        draw_game_view(0, *session_, {0, 0, W, H}, 1.0f, 0.0f);
 #ifdef __ANDROID__
         if (!menu_.active() && settings_.touch_mode != 2)
             touch_.draw(video_, settings_.touch_opacity / 100.0f, touch_.show_ff, touch_.show_rewind);
@@ -470,7 +432,7 @@ void App::run_script() {
             uint32_t ram_hash = 2166136261u;   // FNV-1a of 68000 RAM, to check a replay against the bot's run
             if (session_) for (uint8_t b : session_->md().ram) ram_hash = (ram_hash ^ b) * 16777619u;
             m << s.arg << " " << std::fixed << t << " loop " << loop_frame_ << " runs " << stat_runs_ << " pops " << stat_pops_
-              << " ram " << std::hex << ram_hash << std::dec << " pick " << hfr_pick_ << "/" << hfr_subs_ << "\n";
+              << " ram " << std::hex << ram_hash << std::dec << "\n";
             if (FILE* f = open_file(path_join(autotest_dir_, L"marks.txt"), "ab")) {
                 fputs(m.str().c_str(), f);
                 fclose(f);
@@ -507,8 +469,6 @@ void App::run_script() {
             else if (k == "filter") settings_.filter = std::clamp(v, 0, 4);
             else if (k == "hud_anchor") settings_.hud_anchor = v != 0;
             else if (k == "black_frames") settings_.black_frames = v != 0;
-            else if (k == "high_frame_rate") settings_.high_frame_rate = v != 0;
-            else if (k == "slang_preset") settings_.slang_preset = s.arg.substr(eq + 1);
             else if (k == "refresh") test_refresh_ = v;
             apply_settings();
             break;
@@ -564,9 +524,9 @@ Rect App::game_rect(int fw, int fh, Rect area) {
     return {std::floor(area.x + (area.w - w) * 0.5f), std::floor(area.y + (area.h - h) * 0.5f), w, h};
 }
 
-void App::draw_game_view(int slot, Session& s, Rect area, float alpha, float dim, int sub) {
+void App::draw_game_view(int slot, Session& s, Rect area, float alpha, float dim) {
     int fw, fh;
-    const uint32_t* px = s.frame(fw, fh, sub);
+    const uint32_t* px = s.frame(fw, fh);
     video_.upload_frame_slot(slot, px, fw, fh, fw);
     Rect r = game_rect(fw, fh, area);
     video_.draw_game(slot, r, (ScaleFilter)settings_.filter, alpha, dim);
@@ -575,18 +535,34 @@ void App::draw_game_view(int slot, Session& s, Rect area, float alpha, float dim
 // ---------------------------------------------------------------------------
 // Game control
 // ---------------------------------------------------------------------------
+void GameSlot::choose(int prefer) {
+    int pick = prefer >= 0 && prefer < (int)roms.size() && roms[prefer].found ? prefer : -1;
+    for (size_t v = 0; pick < 0 && v < roms.size(); v++) if (roms[v].found) pick = (int)v;
+    for (size_t v = 0; pick < 0 && v < roms.size(); v++) if (!roms[v].other_file.empty()) pick = (int)v;
+    if (pick < 0) pick = 0;
+    variant = pick;
+    rom = roms.empty() ? RomMatch() : roms[pick];
+}
+
 void App::find_game_roms() {
     rom_sig_ = rom_dirs_signature();
     std::vector<RomSpec> specs;
     std::vector<RomMatch> found;
-    for (auto& g : games_) {
-        specs.push_back({g.module->rom_crc32(), g.module->rom_size(), g.module->rom_names()});
-        found.push_back(std::move(g.rom));
+    for (auto& g : games_) {     // a spec per release of each game (QuackShot has two); finds stay found
+        const std::vector<RomVariant> variants = g.module->rom_variants();
+        g.roms.resize(variants.size());
+        for (size_t v = 0; v < variants.size(); v++) {
+            specs.push_back({variants[v].crc, variants[v].size, g.module->rom_names()});
+            found.push_back(std::move(g.roms[v]));
+        }
     }
     find_roms(specs, found);
+    size_t k = 0;
     for (int i = 0; i < kGameCount; i++) {
         GameSlot& g = games_[i];
-        g.rom = std::move(found[i]);
+        for (RomMatch& r : g.roms) r = std::move(found[k++]);
+        const auto last = settings_.variant.find(g.module->id());
+        g.choose(g.rom.found ? g.variant : (last != settings_.variant.end() ? last->second : 0));
         if (!g.rom.found || g.preview) continue;
         g.preview = std::make_unique<Session>();
         g.preview->set_audio_rate(48000);
@@ -598,46 +574,82 @@ void App::find_game_roms() {
 // ROMs copied in while the launcher is open show up within a second (the folders are listed, and only
 // searched again when something in them changed).
 void App::poll_roms(double dt) {
-    bool missing = false;
-    for (auto& g : games_) missing = missing || !g.rom.found;
+    bool missing = false;     // any release of any game (the card of a game with two is complete only with both)
+    for (auto& g : games_) missing = missing || g.found_count() < (int)g.roms.size();
     if (!missing || (rom_poll_ -= dt) > 0) return;
     rom_poll_ = 1.0;
     if (rom_dirs_signature() == rom_sig_) return;
-    bool was[kGameCount];
-    for (int i = 0; i < kGameCount; i++) was[i] = games_[i].rom.found;
+    const auto was = rom_flags();
     find_game_roms();
-    for (int i = 0; i < kGameCount; i++)
-        if (!was[i] && games_[i].rom.found) menu_.toast(std::string(games_[i].module->title()) + " ROM found");
+    toast_new_roms(was);
+}
+
+std::vector<std::vector<bool>> App::rom_flags() const {
+    std::vector<std::vector<bool>> flags;
+    for (const auto& g : games_) {
+        flags.emplace_back();
+        for (const RomMatch& r : g.roms) flags.back().push_back(r.found);
+    }
+    return flags;
+}
+
+int App::toast_new_roms(const std::vector<std::vector<bool>>& was) {
+    int added = 0;
+    for (int i = 0; i < kGameCount; i++) {
+        const std::vector<RomVariant> variants = games_[i].module->rom_variants();
+        for (size_t v = 0; v < games_[i].roms.size() && v < was[i].size(); v++)
+            if (!was[i][v] && games_[i].roms[v].found) {
+                menu_.toast(std::string(games_[i].module->title()) + (variants[v].label.empty() ? "" : " " + variants[v].label) + " ROM found");
+                added++;
+            }
+    }
+    return added;
 }
 
 void App::scan_soundtracks() {
     std::vector<std::pair<std::string, uint32_t>> ids;
-    for (auto& g : games_) ids.push_back({g.module->id(), g.module->rom_crc32()});
+    for (auto& g : games_)
+        for (const RomVariant& v : g.module->rom_variants()) ids.push_back({g.module->id(), v.crc});
     soundtracks_ = find_soundtracks(ids);
 }
 
 const SoundtrackPack* App::soundtrack_for(int g) {
     auto it = settings_.soundtrack.find(games_[g].module->id());
     if (it == settings_.soundtrack.end() || it->second.empty()) return nullptr;
-    for (const SoundtrackPack& p : soundtracks_)
-        if (p.game_id == it->first && p.name == it->second) return &p;
+    // A game with several releases: a .bps pack goes with the release it names, an .ips pack (which doesn't say) with the first.
+    const GameSlot& gs = games_[g];
+    const std::vector<RomVariant> variants = gs.module->rom_variants();
+    for (const SoundtrackPack& p : soundtracks_) {
+        if (p.game_id != it->first || p.name != it->second) continue;
+        if (variants.size() > 1 && (p.rom_crc ? p.rom_crc != variants[gs.variant].crc : gs.variant != 0)) return nullptr;
+        return &p;
+    }
     return nullptr;
 }
 
 void App::reset_game() {
     const SoundtrackPack* p = soundtrack_for(current_);
-    if ((p ? p->name : std::string()) != playing_soundtrack_) { launch(current_); return; }   // the ROM changes too
+    if ((p ? p->name : std::string()) != playing_soundtrack_) { launch(current_, games_[current_].variant); return; }   // the ROM changes too
     session_->power_on();
     rewind_.clear();
     ach_new_run(settings_.achievements);
 }
 
-void App::launch(int g) {
-    if (!games_[g].rom.found) {
-        menu_.toast(games_[g].rom.other_file.empty() ? "ROM not found - see the game card for details"
-                                                     : "Wrong ROM version - see the game card for details");
+void App::launch(int g, int variant) {
+    GameSlot& gs = games_[g];
+    if (variant < 0) {   // no release asked for: the only one there is, or the player chooses
+        std::vector<int> have;
+        for (size_t v = 0; v < gs.roms.size(); v++) if (gs.roms[v].found) have.push_back((int)v);
+        if (have.size() > 1) { open_version_menu(g, have); return; }
+        variant = have.empty() ? gs.variant : have[0];
+    }
+    if (variant != gs.variant) gs.choose(variant);
+    if (!gs.rom.found) {
+        menu_.toast(gs.rom.other_file.empty() ? "ROM not found - see the game card for details"
+                                              : "Wrong ROM version - see the game card for details");
         return;
     }
+    if (gs.roms.size() > 1) settings_.variant[gs.module->id()] = gs.variant;   // the next prompt starts on it
     session_ = std::make_unique<Session>();
     rewind_.clear();
     session_->set_audio_rate(48000);
@@ -679,7 +691,8 @@ void App::back_to_launcher() {
 std::wstring App::save_path(int slot) {
     std::wstring dir = path_join(data_dir(), L"saves");
     make_dir(dir);
-    return path_join(dir, from_utf8(games_[current_].module->id()) + L"_slot" + std::to_wstring(slot) + L".state");
+    // (a release of a game with two has its own states: one holds the CPU and RAM state of the code that made it)
+    return path_join(dir, from_utf8(session_ ? session_->state_id() : games_[current_].module->id()) + L"_slot" + std::to_wstring(slot) + L".state");
 }
 
 void App::quick_save() {

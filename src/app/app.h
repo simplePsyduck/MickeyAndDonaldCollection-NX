@@ -26,13 +26,22 @@
 #include "touch.h"
 #endif
 
-constexpr const char* kAppVersion = "1.2";   // shown in the launcher, the window title and Credits
+constexpr const char* kAppVersion = "1.1";   // shown in the launcher, the window title and Credits
 constexpr double kEmuFps = 53693175.0 / (3420.0 * 262.0);   // 59.9227 Hz
+
+constexpr int kStateSlots = 20;   // save-state slots per game (per release, for a game with two)
 
 struct GameSlot {
     std::unique_ptr<GameModule> module;
-    RomMatch rom;
+    RomMatch rom;                         // the release in use: the preview's, and what Play starts (a copy of roms[variant])
+    int variant = 0;                      // its index in module->rom_variants()
+    std::vector<RomMatch> roms;           // one per release of the game (a game with two, like QuackShot, has one card)
     std::unique_ptr<Session> preview;     // launcher attract-mode preview
+
+    int found_count() const { int n = 0; for (const RomMatch& r : roms) n += r.found; return n; }
+    // Makes `prefer` the release in use if it was found, else the first one found; with none found, `rom` carries what
+    // the card says about the wrong file.
+    void choose(int prefer);
 };
 
 class Jukebox {
@@ -133,11 +142,6 @@ private:
     int  launcher_last_card_ = 0;
     float launcher_anim_[kGameCount + 5] = {};
     Rect launcher_hit_[kGameCount + 5] = {};   // cards then buttons, where the last draw put them (taps)
-    Rect launcher_link_ = {};            // the Team RedTail logo and its Patreon page, top left (a link; empty: not shown)
-    std::vector<uint32_t> logo_px_;      // the logo resampled to the size it is shown at
-    int logo_w_ = 0, logo_h_ = 0;
-    bool over_launcher_link(float x, float y) const;
-    void open_patreon();
 #ifdef __ANDROID__
     TouchControls touch_;
     bool touch_active_ = true;           // the last input came from the touch screen (else a controller / keys)
@@ -189,8 +193,6 @@ private:
     double time_ = 0;
     double frame_acc_ = 0;
     unsigned vsync_phase_ = 0;           // display refreshes counted, for one game frame every N of them
-    int    hfr_subs_ = 1;                // high frame rate: pictures per game frame (the frame + in-betweens), 1 = off
-    int    hfr_pick_ = 0;                // ...the one this refresh shows: 0 = the frame, k = in-between k
     bool black_frame_ = false;           // this refresh is one of black frame insertion's black ones
     double fps_display_ = 0;
     int    fps_frames_ = 0;
@@ -247,12 +249,6 @@ private:
     void move_to_monitor(int index);
     double refresh_rate();
     std::string black_frames_note();     // Video menu: the refresh rate in use, or why black frames can't be shown
-    int  hfr_sub_frames();               // high frame rate: pictures per game frame at this display (1 = off)
-    std::string high_frame_rate_note();  // Video menu: the refresh rate and in-betweens, or why there are none
-    // Slang shader presets (Windows): loads settings_.slang_preset if it changed; a failure is told and turns it off.
-    void apply_slang();
-    std::wstring slang_loaded_;
-    MenuPage slang_page();
     void apply_settings();
     void save_settings();
 
@@ -270,9 +266,12 @@ private:
     void frame(double dt);
     void update_launcher(const UiInput& ui, double dt);
     void draw_launcher();
-    void launch(int game);
+    void launch(int game, int variant = -1);   // variant: a release of the game; -1 = the one there is, or ask which
+    void open_version_menu(int game, const std::vector<int>& have);   // "Which version?" when a game's releases are both there
     void find_game_roms();                // searches for the ROMs still missing; opens previews for new ones
     void poll_roms(double dt);            // launcher: notices ROMs added while it is open
+    std::vector<std::vector<bool>> rom_flags() const;                    // which release of which game is found
+    int toast_new_roms(const std::vector<std::vector<bool>>& was);       // says what was found since `was`; how many
     // MD+ soundtracks (soundtrack.h): the packs found, and the one the running game was started with
     std::vector<SoundtrackPack> soundtracks_;
     std::string playing_soundtrack_;
@@ -281,7 +280,7 @@ private:
     void reset_game();                    // Reset Game: power-on, or a fresh start when the soundtrack changed
     void back_to_launcher();
     void run_game_frames(int count, bool audio);
-    void draw_game_view(int slot, Session& s, Rect area, float alpha, float dim, int sub = 0);   // sub: in-between
+    void draw_game_view(int slot, Session& s, Rect area, float alpha, float dim);
     Rect game_rect(int fw, int fh, Rect area);
 
     // menus (app_menus.cpp)

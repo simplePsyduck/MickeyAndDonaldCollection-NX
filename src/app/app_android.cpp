@@ -194,15 +194,9 @@ void App::poll_pick() {
     if (r == -1) return;
     picking_roms_ = false;
     if (r <= 0) return;
-    bool was[kGameCount];
-    for (int i = 0; i < kGameCount; i++) was[i] = games_[i].rom.found;
+    const auto was = rom_flags();
     find_game_roms();
-    int added = 0;
-    for (int i = 0; i < kGameCount; i++)
-        if (!was[i] && games_[i].rom.found) {
-            menu_.toast(std::string(games_[i].module->title()) + " ROM found");
-            added++;
-        }
+    const int added = toast_new_roms(was);
     if (!added) menu_.toast(r == 1 ? "That file isn't one of the ROMs - see the game cards" : "No new ROMs in those files - see the game cards");
 }
 
@@ -249,9 +243,6 @@ void App::resize_window_to_scale() {}
 void App::move_to_monitor(int) {}
 // The rate the display really runs the app at (phones change it on their own: 120 Hz, 60 Hz when asked, ...):
 // the median of the last 48 frame intervals, or the display mode's rate until there are enough.
-void App::apply_slang() {}   // (slang presets: Windows only)
-MenuPage App::slang_page() { return MenuPage(); }
-
 double App::refresh_rate() {
     if (refresh_n_ >= 48) {
         float d[48];

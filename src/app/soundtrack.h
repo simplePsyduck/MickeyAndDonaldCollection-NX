@@ -13,6 +13,7 @@ struct SoundtrackPack {
     std::string name;          // the pack's folder name (what the settings store)
     std::string game_id;       // "coi", "qs", ...
     std::wstring dir, cue, patch;
+    uint32_t rom_crc = 0;      // the ROM a .bps patch was made for (an .ips patch doesn't say: 0)
     int tracks = 0;            // tracks in the .cue whose file is there
 };
 

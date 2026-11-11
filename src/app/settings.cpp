@@ -13,11 +13,24 @@ static const char* kHotkeyKeys[HK_COUNT] = {"fast_forward", "rewind", "menu", "q
 
 Settings::Settings() { reset_keys(); }
 
+int overclock_index(int percent) {
+    int best = 0;
+    for (int i = 1; i < kOverclockCount; i++)
+        if (std::abs(kOverclockSteps[i] - percent) < std::abs(kOverclockSteps[best] - percent)) best = i;
+    return best;
+}
+
 void Settings::reset_keys() {
     const int p1[ACT_COUNT] = {VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT, 'Z', 'X', 'C', VK_RETURN};
     const int p2[ACT_COUNT] = {'I', 'K', 'J', 'L', 'U', 'O', 'P', VK_BACK};
+#ifdef __SWITCH__
+    // Pad buttons carry the Nintendo labels here (input_switch.cpp): Genesis A / B / C on Y / B / A, the three
+    // buttons in a row on the controller's left, bottom and right, as the Genesis-classics collections do.
+    const uint32_t pad[ACT_COUNT] = {PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT, PAD_Y, PAD_B, PAD_A, PAD_START};
+#else
     // Genesis-classics style layout: X = A, A = B, B = C.
     const uint32_t pad[ACT_COUNT] = {PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT, PAD_X, PAD_A, PAD_B, PAD_START};
+#endif
     for (int i = 0; i < ACT_COUNT; i++) {
         keys[0][i] = p1[i];
         keys[1][i] = p2[i];
@@ -132,13 +145,12 @@ bool Settings::load(const std::wstring& path) {
             else if (k == "hud_anchor") hud_anchor = iv != 0;
             else if (k == "show_fps") show_fps = iv != 0;
             else if (k == "black_frames") black_frames = iv != 0;
-            else if (k == "high_frame_rate") high_frame_rate = iv != 0;
-            else if (k == "slang_preset") slang_preset = v;
         } else if (section == "audio") {
             if (k == "volume") volume = clampi(iv, 0, 100);
             else if (k == "music_volume") music_volume = clampi(iv, 0, 100);
             else if (k == "filter") audio_filter = (AudioFilter)clampi(iv, 0, (int)AudioFilter::Count - 1);
             else if (k == "ladder_effect") ladder_effect = iv != 0;
+            else if (k == "cpu_overclock") cpu_overclock = kOverclockSteps[overclock_index(iv)];
             else if (k == "soundtrack_volume") soundtrack_volume = clampi(iv, 0, 100);
             else if (k.rfind("soundtrack_", 0) == 0 && k.size() > 11) soundtrack[k.substr(11)] = v;   // soundtrack_coi=<pack>
         } else if (section == "input1" || section == "input2") {
@@ -160,6 +172,7 @@ bool Settings::load(const std::wstring& path) {
             else if (k == "opacity") touch_opacity = clampi(iv, 10, 100);
         } else if (section == "general") {
             if (k == "last_game") last_game = v;
+            else if (k.rfind("variant_", 0) == 0 && k.size() > 8) variant[k.substr(8)] = clampi(iv, 0, 15);   // variant_qs=1
             else if (k == "fast_forward") fast_forward = iv != 0;
             else if (k == "rewind") rewind = iv != 0;
             else if (k == "achievements") achievements = iv != 0;
@@ -175,10 +188,10 @@ bool Settings::save(const std::wstring& path) const {
       << "\nfilter=" << filter << "\nwidescreen=" << (int)widescreen << "\naspect=" << (int)aspect
       << "\ninteger_scale=" << integer_scale << "\ncolor=" << (int)color << "\nbrightness=" << brightness
       << "\nsaturation=" << saturation << "\ngamma=" << gamma << "\nno_sprite_limit=" << no_sprite_limit
-      << "\nhud_anchor=" << hud_anchor << "\nshow_fps=" << show_fps << "\nblack_frames=" << black_frames
-      << "\nhigh_frame_rate=" << high_frame_rate << "\nslang_preset=" << slang_preset << "\n\n[audio]\n"
+      << "\nhud_anchor=" << hud_anchor << "\nshow_fps=" << show_fps << "\nblack_frames=" << black_frames << "\n\n[audio]\n"
       << "volume=" << volume << "\nmusic_volume=" << music_volume << "\nfilter=" << (int)audio_filter
-      << "\nladder_effect=" << ladder_effect << "\nsoundtrack_volume=" << soundtrack_volume << "\n";
+      << "\nladder_effect=" << ladder_effect << "\nsoundtrack_volume=" << soundtrack_volume
+      << "\ncpu_overclock=" << cpu_overclock << "\n";
     for (const auto& kv : soundtrack)
         if (!kv.second.empty()) o << "soundtrack_" << kv.first << "=" << kv.second << "\n";
     for (int p = 0; p < 2; p++) {
@@ -199,6 +212,7 @@ bool Settings::save(const std::wstring& path) const {
     }
     o << "\n[general]\nlast_game=" << last_game << "\nfast_forward=" << fast_forward << "\nrewind=" << rewind
       << "\nachievements=" << achievements << "\n";
+    for (const auto& kv : variant) o << "variant_" << kv.first << "=" << kv.second << "\n";
 #ifdef __ANDROID__
     o << "\n[touch]\nmode=" << touch_mode << "\nopacity=" << touch_opacity << "\n";
 #endif

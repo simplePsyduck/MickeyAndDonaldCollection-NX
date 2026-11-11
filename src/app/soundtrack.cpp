@@ -132,6 +132,7 @@ std::vector<SoundtrackPack> find_soundtracks(const std::vector<std::pair<std::st
         if (has_ext(patch, L".bps")) {
             if (!bps_source_crc(patch, crc)) return;
             for (const auto& g : games) if (g.second == crc) pk.game_id = g.first;
+            pk.rom_crc = crc;
         } else {
             pk.game_id = game_from_name(file_name(dir) + L" " + file_name(patch) + L" " + file_name(cue));
         }

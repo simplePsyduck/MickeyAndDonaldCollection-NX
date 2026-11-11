@@ -40,6 +40,7 @@ void Session::apply_settings(const Settings& s) {
     want_ = c;
     md_->vdp.sprite_limit = !s.no_sprite_limit;
     md_->ym.ladder_effect = s.ladder_effect;
+    md_->cpu_percent = kOverclockSteps[overclock_index(s.cpu_overclock)];
     soundtrack_gain_ = s.volume / 100.0f * s.soundtrack_volume / 100.0f;
     mixer_.configure(md_->sample_rate(), out_rate_, s.audio_filter, s.volume / 100.0f * (module_ ? module_->audio_gain() : 1.0f));
     if (!configured_) switch_config();
@@ -117,9 +118,8 @@ void Session::run_frame(uint16_t pad1, uint16_t pad2) {
     if (pending_) try_switch();
 }
 
-const uint32_t* Session::frame(int& w, int& h, int sub) {
+const uint32_t* Session::frame(int& w, int& h) {
     const VDP& v = md_->vdp;
-    if (sub < 0 || sub >= std::min(v.sub_frames, VDP::kMaxSubFrames)) sub = 0;
     w = v.fb_width;
     h = v.fb_lines;
     pixels_.resize((size_t)w * h);
@@ -129,7 +129,7 @@ const uint32_t* Session::frame(int& w, int& h, int sub) {
         return 0xFF000000u | ((((c >> 16) & 0xFF) * 102 >> 8) << 16) | ((((c >> 8) & 0xFF) * 102 >> 8) << 8) | ((c & 0xFF) * 102 >> 8);
     };
     for (int y = 0; y < h; y++) {
-        const uint16_t* src = sub ? v.sub_fb[sub - 1][y] : v.fb[y];
+        const uint16_t* src = v.fb[y];
         uint32_t* dst = &pixels_[(size_t)y * w];
         for (int x = 0; x < w; x++) dst[x] = lut_[src[x] & 0x7FF];
         if ((dim_l_ || dim_r_) && (mask_lines_ == 0 || y < mask_lines_)) {
@@ -164,13 +164,15 @@ void Session::mix_audio(std::vector<int16_t>& out, double adjust) {
         mdplus_->mix(&out[before], (int)((out.size() - before) / 2), out_rate_, soundtrack_gain_);
 }
 
+std::string Session::state_id() const { return module_ && md_ ? module_->state_id(*md_) : std::string(); }
+
 std::vector<uint8_t> Session::save_state(const std::string& extra) {
     std::vector<uint8_t> s = md_->save_state();
     // Append a tag: the module id (states from another game are rejected) and the configuration the ROM ran
     // with ("qs|108|cheat,cheat"), so a load can restore exactly that ROM before moving to the current settings;
     // then the app's note, if any ("|a1.00000000"), and what the soundtrack plays, if any ("|t12,34567,1,255").
     const std::string cd = mdplus_ ? mdplus_->state() : std::string();
-    std::string tag = module_ ? module_->id() : "";
+    std::string tag = state_id();
     tag += "|" + std::to_string(cfg_.ext) + "|";
     for (const auto& kv : cfg_.cheats)
         if (kv.second && tag.size() + kv.first.size() + extra.size() + cd.size() < 236) tag += kv.first + ",";
@@ -187,7 +189,7 @@ bool Session::load_state(const std::vector<uint8_t>& data, std::string* extra) {
     if (data.size() < idlen + 1) return false;
     std::string tag(data.end() - 1 - idlen, data.end() - 1);
     size_t bar = tag.find('|');
-    if (!module_ || tag.substr(0, bar) != module_->id()) return false;
+    if (!module_ || tag.substr(0, bar) != state_id()) return false;
     std::vector<uint8_t> core(data.begin(), data.end() - 1 - idlen);
     if (!md_->load_state(core)) return false;
     // The state runs on the ROM it was saved with; the current settings follow when it is safe (try_switch).

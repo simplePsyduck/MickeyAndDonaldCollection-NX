@@ -12,7 +12,7 @@ namespace {
 const std::map<int, std::pair<int, bool>>& soundtrack_tracks(GameModule* module, const std::vector<uint8_t>& rom,
                                                              const SoundtrackPack& pack) {
     static std::map<std::wstring, std::map<int, std::pair<int, bool>>> cache;
-    const std::wstring key = pack.patch;
+    const std::wstring key = pack.patch + L"|" + std::to_wstring(rom.size());   // (a game's releases differ in size)
     auto it = cache.find(key);
     if (it != cache.end()) return it->second;
     std::map<int, std::pair<int, bool>>& out = cache[key];

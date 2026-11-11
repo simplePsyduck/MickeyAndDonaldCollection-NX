@@ -43,9 +43,6 @@ struct Settings {
     bool        hud_anchor = true;          // re-anchor HUD to the screen edges in widescreen
     bool        show_fps = false;
     bool        black_frames = false;       // black frame insertion (120 / 180 / 240 Hz displays)
-    bool        high_frame_rate = false;    // in-between pictures on the refreshes between the game's frames (90 Hz+)
-    std::string slang_preset;               // a slang shader preset (.slangp) in place of the filter: relative to the
-                                            // exe's folder (or absolute), UTF-8; empty = off (Windows)
 
     // Audio
     int         volume = 80;                // 0..100
@@ -54,6 +51,9 @@ struct Settings {
     std::map<std::string, std::string> soundtrack;   // game id -> soundtrack pack (folder name); none = the original
     AudioFilter audio_filter = AudioFilter::Model1;
     bool        ladder_effect = true;
+
+    // Emulation: the 68000's clock in percent of stock (100 to 400 in steps of 25); more takes out slowdown in busy scenes
+    int         cpu_overclock = 100;
 
     // Input: keyboard virtual-key codes and pad button bits (PadButton) per action, player 1/2
     int         keys[2][ACT_COUNT];
@@ -77,6 +77,7 @@ struct Settings {
     std::map<std::string, std::map<std::string, bool>> cheats;
 
     std::string last_game;
+    std::map<std::string, int> variant;              // game id -> the release played last (index in GameModule::rom_variants)
 
     Settings();
     void reset_keys();
@@ -90,6 +91,10 @@ struct Settings {
 // The controller slot a player (0/1) uses, or -1: their chosen slot, or (Auto, pad_index -1) the first
 // connected pad the other player isn't using - so two players never share a pad unless both picked it.
 int resolve_player_pad(const int pad_index[2], const bool* connected, int slots, int player);
+
+constexpr int kOverclockSteps[] = {100, 125, 150, 175, 200, 225, 250, 275, 300, 325, 350, 375, 400};   // Settings::cpu_overclock
+constexpr int kOverclockCount = (int)(sizeof(kOverclockSteps) / sizeof(kOverclockSteps[0]));
+int overclock_index(int percent);   // the nearest step's index
 
 int wide_ext(WideMode m);           // extra pixels per side for a widescreen mode
 const char* color_mode_name(ColorMode m);
