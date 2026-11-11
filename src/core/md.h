@@ -109,8 +109,15 @@ public:
     uint8_t  z80_read(uint16_t a);
     void     z80_write(uint16_t a, uint8_t v);
 
+    // The 68000's clock as a percentage of the real one (100 = stock 7.67 MHz). Above 100 it gets that much more done per
+    // frame; the Z80, the VDP and the sound chips keep their own clocks, so it only takes the slowdown out of busy scenes.
+    // (Set between frames; not part of a save state.)
+    int     cpu_percent = 100;
+    // master clocks the 68000 takes for `cycles` of its own (7 each at stock speed)
+    int64_t cpu_mclk(int64_t cycles) const { return (cycles * 700 + cpu_percent / 2) / cpu_percent; }
+
     // current master-clock position within the frame
-    int64_t now_68k() const { return m68_clock + (int64_t)cpu.executed() * 7; }
+    int64_t now_68k() const { return m68_clock + cpu_mclk(cpu.executed()); }
     int64_t now_z80() const { return z80_clock + (int64_t)z80.executed() * 15; }
     int     line_clock() const;
 

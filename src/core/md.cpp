@@ -21,7 +21,11 @@ static uint16_t cb_dma_read(void* c, uint32_t a) {
     return 0;
 }
 static int  cb_line_clock(void* c) { return ((MegaDrive*)c)->line_clock(); }
-static void cb_stall(void* c, int cycles) { ((MegaDrive*)c)->cpu.add_cycles(cycles); }
+// The VDP holds the bus for a fixed time (given here in stock 68000 cycles); an overclocked 68000 loses more of its own.
+static void cb_stall(void* c, int cycles) {
+    MegaDrive* md = (MegaDrive*)c;
+    md->cpu.add_cycles((int)(((int64_t)cycles * md->cpu_percent + 50) / 100));
+}
 static void cb_irq(void* c, int level) { ((MegaDrive*)c)->cpu.set_irq(level); }
 
 MegaDrive::MegaDrive() {
@@ -142,9 +146,9 @@ void MegaDrive::run_until(int64_t target) {
     while (m68_clock < target || z80_clock < target) {
         int64_t slice_end = std::min(target, std::min(m68_clock, z80_clock) + 1140);
         if (m68_clock < slice_end) {
-            int cycles = (int)((slice_end - m68_clock + 6) / 7);
+            int cycles = (int)(((slice_end - m68_clock) * cpu_percent + 699) / 700);   // (stock: (n + 6) / 7)
             int done = cpu.run(cycles);
-            m68_clock += (int64_t)done * 7;
+            m68_clock += cpu_mclk(done);
         }
         if (!z80_reset && !z80_busreq) {
             if (z80_clock < slice_end) {
