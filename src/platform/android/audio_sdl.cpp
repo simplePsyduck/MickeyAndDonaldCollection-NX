@@ -1,4 +1,4 @@
-// SDL audio output for Android (see audio.h): 48 kHz stereo int16 pushed into SDL's queue.
+// SDL audio output for Android/Switch (see audio.h): 48 kHz stereo int16 pushed into SDL's queue.
 #include "../audio.h"
 #include <SDL.h>
 #include <algorithm>
@@ -21,7 +21,10 @@ bool Audio::init(int sample_rate) {
     want.freq = sample_rate;
     want.format = AUDIO_S16SYS;
     want.channels = 2;
-    want.samples = 512;
+    // Increased buffer size from 512 to 4096 frames (~86ms at 48kHz) to prevent crackling/popping on Switch
+    // This provides enough headroom for audio thread starvation and variable frame timing
+    // On Switch, larger buffers are critical due to the single-threaded CPU architecture
+    want.samples = 4096;
     impl->dev = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
     if (!impl->dev) return false;
     impl->rate = have.freq;
@@ -31,6 +34,8 @@ bool Audio::init(int sample_rate) {
 
 void Audio::shutdown() {
     if (impl->dev) {
+        // Pause audio before closing to prevent any artifacts
+        SDL_PauseAudioDevice(impl->dev, 1);
         SDL_CloseAudioDevice(impl->dev);
         impl->dev = 0;
     }
@@ -38,19 +43,33 @@ void Audio::shutdown() {
 
 void Audio::push(const int16_t* stereo, int frames) {
     if (!impl->dev || frames <= 0) return;
-    // never more than ~250 ms queued: the excess is dropped, as on Windows
+    
+    // Never more than ~250 ms queued: the excess is dropped, as on Windows
     const int room = impl->rate / 4 - queued_frames();
     frames = std::min(frames, room);
     if (frames <= 0) return;
+    
+    // Apply volume scaling if needed
     if (impl->volume < 0.999f) {
         impl->tmp.assign(stereo, stereo + frames * 2);
         for (int16_t& s : impl->tmp) s = (int16_t)(s * impl->volume);
         stereo = impl->tmp.data();
     }
+    
+    // Queue the audio data
     SDL_QueueAudio(impl->dev, stereo, (Uint32)frames * 4);
 }
 
-int Audio::queued_frames() const { return impl->dev ? (int)(SDL_GetQueuedAudioSize(impl->dev) / 4) : 0; }
+int Audio::queued_frames() const { 
+    return impl->dev ? (int)(SDL_GetQueuedAudioSize(impl->dev) / 4) : 0; 
+}
+
 int Audio::sample_rate() const { return impl->rate; }
-void Audio::set_paused(bool paused) { if (impl->dev) SDL_PauseAudioDevice(impl->dev, paused ? 1 : 0); }
-void Audio::set_master_volume(float v) { impl->volume = std::max(0.0f, std::min(v, 1.0f)); }
+
+void Audio::set_paused(bool paused) { 
+    if (impl->dev) SDL_PauseAudioDevice(impl->dev, paused ? 1 : 0); 
+}
+
+void Audio::set_master_volume(float v) { 
+    impl->volume = std::max(0.0f, std::min(v, 1.0f)); 
+}

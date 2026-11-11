@@ -1,11 +1,17 @@
 // OpenGL ES 3.0 presentation layer for Android (see video.h); the same drawing model as the Direct3D 11 one in
 // video.cpp: the game frame with its filters, then batched overlay quads (rects, rounded rects, text).
-// UI glyphs are rendered by Android's own text engine (MDActivity.renderGlyphs, through JNI) into one atlas.
+// UI glyphs are rendered into one atlas: by Android's own text engine (MDActivity.renderGlyphs, through JNI), or
+// on the Nintendo Switch by FreeType over the console's system fonts (platform/switch/glyphs_ft.cpp).
 #include "../video.h"
 #include <SDL.h>
 #include <GLES3/gl3.h>
+#ifdef __ANDROID__
 #include <jni.h>
 #include <android/log.h>
+#else
+#include "../switch/glyphs_ft.h"
+#include <cstdio>
+#endif
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -87,13 +93,6 @@ const char* kGamePS[(int)ScaleFilter::Count] = {
 }
 )",
 };
-// draw_image: straight alpha, texel for pixel.
-const char* kImagePS = R"(void main() {
-    vec4 c = texelFetch(u_tex, clamp(ivec2(floor(src_pos())), ivec2(0), ivec2(u_src) - 1), 0).bgra;
-    o_col = vec4(c.rgb, c.a * u_alpha);
-}
-)";
-const int kImageSlot = 4;
 
 const char* kOverlayVS = R"(#version 300 es
 layout(location = 0) in vec2 a_pos;
@@ -182,7 +181,11 @@ uint32_t next_cp(const char*& p, const char* end) {
     return cp;
 }
 
+#ifdef __ANDROID__
 void log_error(const char* msg) { __android_log_print(ANDROID_LOG_ERROR, "MickeyDonald", "%s", msg); }
+#else
+void log_error(const char* msg) { fprintf(stderr, "MickeyDonald: %s\n", msg); }
+#endif
 
 GLuint compile(GLenum type, const std::string& src) {
     GLuint s = glCreateShader(type);
@@ -230,13 +233,12 @@ struct Video::Impl {
     int w = 0, h = 0;
     bool vsync = true, in_frame = false, fonts_dirty = true;
 
-    // (one more than the filters: the last is draw_image's)
-    GLuint prog_game[(int)ScaleFilter::Count + 1] = {}, prog_ov = 0;
-    struct GameLoc { GLint dst, src, scale, origin, alpha, dim, h, tex; } gl_game[(int)ScaleFilter::Count + 1] = {};
+    GLuint prog_game[(int)ScaleFilter::Count] = {}, prog_ov = 0;
+    struct GameLoc { GLint dst, src, scale, origin, alpha, dim, h, tex; } gl_game[(int)ScaleFilter::Count] = {};
     GLint ov_screen = -1, ov_atlas = -1;
     GLuint vao_game = 0, vao_ov = 0, vb = 0, ib = 0;
 
-    struct Slot { GLuint tex = 0; int w = 0, h = 0, tw = 0, th = 0; } slots[5];   // 4: the image (kImageSlot)
+    struct Slot { GLuint tex = 0; int w = 0, h = 0, tw = 0, th = 0; } slots[4];
 
     GLuint atlas = 0;
     std::vector<uint8_t> atlas_cpu;
@@ -246,8 +248,8 @@ struct Video::Impl {
     std::vector<OVert> verts;
 
     bool create_pipeline() {
-        for (int i = 0; i <= (int)ScaleFilter::Count; i++) {
-            prog_game[i] = link(kGameVS, std::string(kGameCommon) + (i < (int)ScaleFilter::Count ? kGamePS[i] : kImagePS));
+        for (int i = 0; i < (int)ScaleFilter::Count; i++) {
+            prog_game[i] = link(kGameVS, std::string(kGameCommon) + kGamePS[i]);
             if (!prog_game[i]) return false;
             GameLoc& L = gl_game[i];
             GLuint p = prog_game[i];
@@ -302,28 +304,9 @@ struct Video::Impl {
         if (vao_ov) { glDeleteVertexArrays(1, &vao_ov); vao_ov = 0; }
     }
 
-    // A slot's picture in `dst`, through program `f` (a filter, or Count: the image's).
-    void draw_quad(const Slot& s, Rect dst, int f, float alpha, float dim) {
-        const Impl::GameLoc& L = gl_game[f];
-        glUseProgram(prog_game[f]);
-        glUniform4f(L.dst, dst.x / w * 2 - 1, 1 - dst.y / h * 2, (dst.x + dst.w) / w * 2 - 1, 1 - (dst.y + dst.h) / h * 2);
-        glUniform2f(L.src, (float)s.w, (float)s.h);
-        glUniform2f(L.scale, dst.w / s.w, dst.h / s.h);
-        glUniform2f(L.origin, dst.x, dst.y);
-        glUniform1f(L.alpha, std::min(alpha, 1.0f));
-        glUniform1f(L.dim, std::max(0.0f, std::min(dim, 1.0f)));
-        glUniform1f(L.h, (float)h);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, s.tex);
-        glUniform1i(L.tex, 0);
-        glBindVertexArray(vao_game);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        glBindVertexArray(0);
-    }
-
     // ---- game textures ---------------------------------------------------------
     void upload(int slot, const uint32_t* px, int fw, int fh, int pitch) {
-        if (slot < 0 || slot > 4 || !px || fw <= 0 || fh <= 0 || fw > 4096 || fh > 4096 || !gl) return;
+        if (slot < 0 || slot > 3 || !px || fw <= 0 || fh <= 0 || fw > 4096 || fh > 4096 || !gl) return;
         Slot& s = slots[slot];
         s.w = fw; s.h = fh;
         if (!s.tex) {
@@ -349,6 +332,12 @@ struct Video::Impl {
     // ---- fonts -----------------------------------------------------------------
     int font_base() const { return std::min(h, w * 3 / 4); }
 
+#ifndef __ANDROID__
+    // The glyphs of one font from the platform's system fonts (FreeType); returns false if there are none.
+    bool render_font(const std::vector<uint32_t>& cps, float px, bool bold, std::vector<int>& meta, std::vector<uint8_t>& bits) {
+        return ft_render_glyphs(switch_system_fonts(), cps, px, bold, meta, bits);
+    }
+#else
     // Asks MDActivity.renderGlyphs for one font's glyphs; returns false if Java isn't reachable.
     bool render_font(const std::vector<uint32_t>& cps, float px, bool bold, std::vector<int>& meta, std::vector<uint8_t>& bits) {
         JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
@@ -380,6 +369,7 @@ struct Video::Impl {
         env->DeleteLocalRef(act);
         return ok;
     }
+#endif
 
     void build_fonts() {
         fonts_dirty = false;
@@ -581,15 +571,6 @@ void Video::resize(int width, int height) {
 
 int  Video::width() const { return impl->w; }
 int  Video::height() const { return impl->h; }
-// (slang presets are Windows only: librashader's Direct3D 11 runtime)
-bool Video::slang_available() { return false; }
-bool Video::slang_active() const { return false; }
-bool Video::set_slang(const std::wstring& path, std::string* error) {
-    if (path.empty()) return true;
-    if (error) *error = "not available on Android";
-    return false;
-}
-
 void Video::set_vsync(bool on) {
     if (impl->vsync == on) return;
     impl->vsync = on;
@@ -624,18 +605,21 @@ void Video::draw_game(int slot, Rect dst, ScaleFilter filter, float alpha, float
     int f = (int)filter;
     if (!s.tex || f < 0 || f >= (int)ScaleFilter::Count || alpha <= 0 || !I.prog_game[f]) return;
     I.flush();
-    I.draw_quad(s, dst, f, alpha, dim);
-}
-
-void Video::upload_image(const uint32_t* pixels, int w, int h) { impl->upload(kImageSlot, pixels, w, h, w); }
-
-void Video::draw_image(Rect dst, float alpha) {
-    Impl& I = *impl;
-    Impl::Slot& s = I.slots[kImageSlot];
-    const int f = (int)ScaleFilter::Count;
-    if (!I.in_frame || !s.tex || dst.w <= 0 || dst.h <= 0 || alpha <= 0 || !I.prog_game[f]) return;
-    I.flush();
-    I.draw_quad(s, dst, f, alpha, 0.0f);
+    const Impl::GameLoc& L = I.gl_game[f];
+    glUseProgram(I.prog_game[f]);
+    glUniform4f(L.dst, dst.x / I.w * 2 - 1, 1 - dst.y / I.h * 2, (dst.x + dst.w) / I.w * 2 - 1, 1 - (dst.y + dst.h) / I.h * 2);
+    glUniform2f(L.src, (float)s.w, (float)s.h);
+    glUniform2f(L.scale, dst.w / s.w, dst.h / s.h);
+    glUniform2f(L.origin, dst.x, dst.y);
+    glUniform1f(L.alpha, std::min(alpha, 1.0f));
+    glUniform1f(L.dim, std::max(0.0f, std::min(dim, 1.0f)));
+    glUniform1f(L.h, (float)I.h);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s.tex);
+    glUniform1i(L.tex, 0);
+    glBindVertexArray(I.vao_game);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindVertexArray(0);
 }
 
 void Video::fill_rect(Rect r, uint32_t color) { fill_rect_gradient(r, color, color); }
