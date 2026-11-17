@@ -38,7 +38,7 @@ CPPFILES    := m68k.cpp z80.cpp vdp.cpp ym2612.cpp psg.cpp md.cpp \
 
 APP_TITLE   := Mickey & Donald Collection
 APP_AUTHOR  := Darhkfox & simplePsyduck
-APP_VERSION := 1.1
+APP_VERSION := 1.1.2
 ICON        := icon.jpg
 
 #---------------------------------------------------------------------------------
