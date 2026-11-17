@@ -36,6 +36,12 @@ struct RomVariant {
     std::string hint;       // expected file description for messages: "the QuackShot (World REV 00) ROM"
 };
 
+// Bytes a ROM patch writes, at an offset of the patched ROM (an offset past the original's end is added code or data).
+struct PatchEdit {
+    uint32_t offset = 0;
+    std::vector<uint8_t> bytes;
+};
+
 struct GameConfig {
     int  ext = 0;                        // widescreen: extra pixels on each side (0, 20, 40)
     bool hud_anchor = true;              // move HUD elements to the screen edges in widescreen
@@ -110,6 +116,17 @@ public:
     virtual const char* rom_hint() const = 0;    // expected file description for error messages
     // The releases that can be played (rom_crc32() / rom_size() / rom_hint() describe the first). Most games have one.
     virtual std::vector<RomVariant> rom_variants() const { return {{rom_crc32(), rom_size(), "", rom_hint()}}; }
+    // MD+ soundtracks: a pack's patch is made for one release of a game. When a game has several, a patch can sometimes be
+    // carried over: `edits` are the bytes it writes into release `from`'s ROM (`from_size` long), and `target` is release
+    // `to`'s ROM, which they are written into (moved to where they belong, and grown if the patch adds after the end).
+    // `orig`, when the caller has release `from`'s ROM, lets the places be checked against it. false: they can't be
+    // (the caller then plays the game without the soundtrack).
+    virtual bool can_port_patch(int from, int to) const { (void)from; (void)to; return false; }
+    virtual bool port_patch(const std::vector<PatchEdit>& edits, uint32_t from_size, const std::vector<uint8_t>* orig,
+                            std::vector<uint8_t>& target) const {
+        (void)edits; (void)from_size; (void)orig; (void)target;
+        return false;
+    }
     // What names a save state's game: id(), plus the release when its states can't be shared with another one (a state
     // holds RAM and CPU state, which only fits the code that made it). `md` runs the release in question.
     virtual std::string state_id(const MegaDrive& md) const { (void)md; return id(); }
@@ -126,6 +143,8 @@ public:
     virtual void pre_frame(MegaDrive& md, const GameConfig& cfg) { (void)md; (void)cfg; }
     virtual void post_frame(MegaDrive& md, const GameConfig& cfg, FrameInfo& info) { (void)md; (void)cfg; (void)info; }
 
+    // A game hotkey of the app's (Session::game_hotkey). QuackShot: 0 / 1 = next / previous weapon.
+    virtual void hotkey(MegaDrive& md, const GameConfig& cfg, int id) { (void)md; (void)cfg; (void)id; }
     virtual std::vector<CheatEntry> cheats() const { return {}; }
 
     virtual std::vector<LevelEntry> levels() const { return {}; }

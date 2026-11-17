@@ -22,15 +22,63 @@ constexpr uint32_t POPCORN = 0xFF8F90, GUM = 0xFF8F92, AMMO_DIRTY = 0xFFEE5B;
 constexpr uint32_t FREE_MOVE = 0xFFEE07;
 constexpr uint32_t QUACK = 0xFFEE62, QUACK_TIME = 0xFF8FA8, TEMPER = 0xFF8F9A;
 // The code wide_patches adds goes to free ROM (Rev::code); where in it things are:
-constexpr uint32_t CLAMP_AT = 0x000, ON_SCREEN_AT = 0x200, WRAPPER_AT = 0x400, HOOK_AT = 0x420, TRIGGER_AT = 0x4A0;
-constexpr uint32_t SPAWN_ALL_AT = HOOK_AT + 31 * 2;   // "moveq #0/1,d6" in the spawn hook (see wide_patches)
-constexpr uint32_t LEFT_FLAG_AT = TRIGGER_AT + 4;     // "bra.s" there skips the 4:3 left column, "nop" runs it
-constexpr uint16_t LEFT_OFF = 0x600E, LEFT_ON = 0x4E71;
+constexpr uint32_t CLAMP_AT = 0x000, ON_SCREEN_AT = 0x200, WRAPPER_AT = 0x400, TRIGGER_AT = 0x4A0, HOOK_AT = 0x600;
+constexpr uint32_t POST_AT = 0x700;    // the "spawns behind the player" option's routine after an object's X is set
+constexpr uint32_t WAKE_AT = 0x800;    // ... and the golden Scrooge statues' wake-up distance, from where they will be
+constexpr uint32_t CHARM_AT = 0x840, CWALL_AT = 0x870;
+constexpr uint32_t DEDUP_AT = 0x900;   // ... and the penguins' twin-entry check (see the entry hook)   // the snake charmers' step direction / wall test while catching up
+// From this width on (16:9 and wider) the right spawn trigger also looks one 128-px cell further ("far" pass, see
+// wide_patches): otherwise objects filed close to their cell's start (wide platforms, the South Pole penguins) are made
+// at the old 4:3 edge, which a 16:9 view already shows.
+constexpr int kFarFrom = 40;
+// Two flag words in the spawn hook, each a "moveq #0/1,d6" (see wide_patches): 1 = the 4:3 column's pass creates all
+// its entries (the first crossing after a turn), 0 = only the deferred ones. Right trigger / left trigger.
+constexpr uint32_t SPAWN_ALL_AT = HOOK_AT + 2, LEFT_FLAG_AT = HOOK_AT + 6;
+constexpr uint16_t LEFT_OFF = 0x7C00, LEFT_ON = 0x7C01;
 constexpr uint32_t SFX_REQ = 0xFFEE52;    // sound effect waiting to go to the Z80 driver ($7FED8 sends it)
 constexpr uint8_t SFX_PLANE = 0xB4;       // "airplane arrives", asked for by the plane object ($8024)
 constexpr uint8_t M_TITLE = 0x01, M_MAP = 0x02, M_MAP_TO_LEVEL = 0x03, M_GAMEPLAY = 0x05, M_PAUSE = 0x08,
                   M_ENDING = 0x09, M_MENU = 0x0B, M_INTRO = 0x0C;
 constexpr uint16_t PLUNGER_COLORS[3] = {0x02CE, 0x022E, 0x02A2};   // yellow / red / green
+
+// The plunger colour options (Enhancements: "Yellow / Red / Green plunger color"). Mega Drive colour words $0BGR. The
+// first three are the game's own, so a plunger's default choice is its own index; the key a choice is carried under in
+// GameConfig::cheats is "plunger<type>_<choice>" (Session::apply_settings), and none means the default.
+constexpr int kPlungerShadeCount = 12;
+constexpr uint16_t PLUNGER_SHADES[kPlungerShadeCount] = {
+    0x02CE, 0x022E, 0x02A2,                                   // yellow, red, green
+    0x0E42, 0x0C2A, 0x0A6E, 0x0EA6, 0x0E6A, 0x06E6,           // blue, purple, pink, light blue, light purple, light green
+    0x0EEE, 0x0048, 0x0888,                                   // white, brown, grey
+};
+int plunger_choice(const GameConfig& cfg, int type) {
+    char key[24];
+    for (int c = 0; c < kPlungerShadeCount; c++) {
+        snprintf(key, sizeof(key), "plunger%d_%d", type, c);
+        if (cfg.cheat(key)) return c;
+    }
+    return type;
+}
+// The game's own colour table (what its routine at $5000 reads, $501E in REV 00): three words, one per plunger type,
+// which the ROM patch rewrites. Found by its contents in the original ROM, where REV 01 has it a few bytes further up
+// (0: not found, the option then does nothing).
+uint32_t plunger_table(const MegaDrive& md) {
+    for (uint32_t a = 0x4F00; a < 0x5400; a += 2)
+        if (md.rom_orig16(a) == PLUNGER_COLORS[0] && md.rom_orig16(a + 2) == PLUNGER_COLORS[1] &&
+            md.rom_orig16(a + 4) == PLUNGER_COLORS[2]) return a;
+    return 0;
+}
+// The colour the running ROM gives a plunger type
+uint16_t plunger_word(const MegaDrive& md, int type) {
+    const uint32_t t = plunger_table(md);
+    return t ? md.rom16(t + 2 * (uint32_t)type) : PLUNGER_COLORS[type];
+}
+std::vector<RomPatch> plunger_color_patches(const MegaDrive& md, const GameConfig& cfg) {
+    const uint32_t t = plunger_table(md);
+    std::vector<uint16_t> repl;
+    for (int type = 0; type < 3; type++) repl.push_back(PLUNGER_SHADES[plunger_choice(cfg, type)]);
+    if (!t || std::equal(repl.begin(), repl.end(), PLUNGER_COLORS)) return {};
+    return {{t, std::vector<uint16_t>(PLUNGER_COLORS, PLUNGER_COLORS + 3), repl}};
+}
 
 // ---- releases -------------------------------------------------------------------------------------------------
 // REV 00 (512 KB) and REV 01 (1.25 MB) are the same program assembled twice: REV 01's code sits a little further up (a
@@ -67,18 +115,25 @@ struct Rev {
 const Site kRev01Sites[] = {
     {0x0025E0, 0x00262C}, {0x002664, 0x0026B0}, {0x00266A, 0x0026B6}, {0x0026C8, 0x002714},
     {0x0026FC, 0x002748}, {0x0035A0, 0x0035EC}, {0x003F96, 0x003FE6}, {0x003FCE, 0x00401E},
-    {0x00481E, 0x004872}, {0x005000, 0x005086}, {0x005108, 0x005192}, {0x005130, 0x0051BA},
-    {0x005976, 0x005A44}, {0x00597E, 0x005A4C}, {0x005E16, 0x005EE4}, {0x005FDE, 0x0060AC},
-    {0x00742C, 0x0074B6}, {0x009A9A, 0x009B64}, {0x009BCE, 0x009C98}, {0x009BD4, 0x009C9E},
-    {0x00B866, 0x00B99A}, {0x00CD52, 0x00CE86}, {0x00CDB0, 0x00CEE4}, {0x00CE92, 0x00CFC6},
-    {0x00CF02, 0x00D036}, {0x00DB60, 0x00DC94}, {0x00DCD0, 0x00DE04}, {0x00E6EC, 0x00E826},
-    {0x00E86E, 0x00E9A8}, {0x00F414, 0x00F57A}, {0x00FB7A, 0x00FCE0}, {0x010832, 0x010998},
+    {0x0046CC, 0x004720}, {0x00481E, 0x004872}, {0x005000, 0x005086}, {0x005108, 0x005192},
+    {0x005130, 0x0051BA}, {0x0051BA, 0x005244}, {0x005976, 0x005A44}, {0x00597E, 0x005A4C},
+    {0x005E16, 0x005EE4}, {0x005FDE, 0x0060AC}, {0x00742C, 0x0074B6}, {0x009A9A, 0x009B64},
+    {0x009BCE, 0x009C98}, {0x009BD4, 0x009C9E}, {0x009D66, 0x009E30}, {0x00B0C8, 0x00B1FC},
+    {0x00B35E, 0x00B492}, {0x00B37E, 0x00B4B2}, {0x00B480, 0x00B5B4}, {0x00B4A6, 0x00B5DA},
+    {0x00B5DE, 0x00B712}, {0x00B5F2, 0x00B726}, {0x00B866, 0x00B99A}, {0x00B8CE, 0x00BA02},
+    {0x00CD52, 0x00CE86}, {0x00CDB0, 0x00CEE4}, {0x00CE92, 0x00CFC6}, {0x00CF02, 0x00D036},
+    {0x00D308, 0x00D43C}, {0x00D340, 0x00D474}, {0x00D444, 0x00D578}, {0x00D4F6, 0x00D62A},
+    {0x00D772, 0x00D8A6}, {0x00D7DA, 0x00D90E}, {0x00D7F6, 0x00D92A}, {0x00DB60, 0x00DC94},
+    {0x00DCD0, 0x00DE04}, {0x00E6EC, 0x00E826}, {0x00E834, 0x00E96E}, {0x00E86E, 0x00E9A8},
+    {0x00ECC4, 0x00EDFE}, {0x00F414, 0x00F57A}, {0x00FB7A, 0x00FCE0}, {0x01013A, 0x0102A0},
+    {0x010148, 0x0102AE}, {0x01015A, 0x0102C0}, {0x01018A, 0x0102F0}, {0x010832, 0x010998},
     {0x010F12, 0x01108E}, {0x010FE4, 0x011160}, {0x010FF4, 0x011170}, {0x011032, 0x0111AE},
     {0x011042, 0x0111BE}, {0x01107E, 0x0111FA}, {0x01108E, 0x01120A}, {0x0110FA, 0x011276},
-    {0x011FEC, 0x012168}, {0x011FF4, 0x012170}, {0x012164, 0x0122E0}, {0x012258, 0x0123D4},
-    {0x013A6E, 0x013BEA}, {0x013AD6, 0x013C52}, {0x013F74, 0x0140F0}, {0x019BEA, 0x019D74},
-    {0x019BFC, 0x019D86}, {0x019C14, 0x019D9E}, {0x019C20, 0x019DAA}, {0x019C52, 0x019DDC},
-    {0x019C92, 0x019E1C}, {0x019D74, 0x019EFE}, {0x019D7C, 0x019F06},
+    {0x011918, 0x011A94}, {0x011FEC, 0x012168}, {0x011FF4, 0x012170}, {0x012164, 0x0122E0},
+    {0x012258, 0x0123D4}, {0x013A6E, 0x013BEA}, {0x013AD6, 0x013C52}, {0x013F74, 0x0140F0},
+    {0x0158CA, 0x015A46}, {0x019BEA, 0x019D74}, {0x019BFC, 0x019D86}, {0x019C14, 0x019D9E},
+    {0x019C20, 0x019DAA}, {0x019C52, 0x019DDC}, {0x019C92, 0x019E1C}, {0x019CC4, 0x019E4E},
+    {0x019D74, 0x019EFE}, {0x019D7C, 0x019F06},
 };
 // END kRev01Sites
 
@@ -222,6 +277,42 @@ std::vector<RomPatch> inf_ammo_patches(const Rev& R) {
         {R.at(0x005108), {0x5B78, 0x8F90}, {0x4E71, 0x4E71}}, {R.at(0x005130), {0x5378, 0x8F92}, {0x4E71, 0x4E71}},
     };
 }
+// "Play levels from beginning": mode 4 ($46C8) loads a cleared location (flag $EEBF + loc set) at its return entry
+// (the plane pickup flag's spot) when asked for its first one. Its "is it cleared" test goes through FROM_START_AT
+// (in the free code, after the wide patches' routines): a word there, nop or bra.s, makes the answer "no" for that
+// test alone while the start is armed (QsModule::from_start_frame), so the location loads at its first entry and is
+// still cleared for everything else - the plane pickup flag stands where it was planted.
+constexpr uint32_t FROM_START_AT = 0x8A0, FROM_START_FLAG = FROM_START_AT + 4;
+constexpr uint16_t FROM_START_OFF = 0x4E71, FROM_START_ON = 0x6006;
+std::vector<RomPatch> level_start_patches(const Rev& R) {
+    const uint32_t at = R.code + FROM_START_AT;
+    const std::vector<uint16_t> code = {
+        0x43F8, 0xEEBF,                   // lea $EEBF.w,a1          (as the game)
+        FROM_START_OFF,                   // FROM_START_FLAG: nop / bra.s armed
+        0x4A31, 0x0000, 0x4E75,           // tst.b 0(a1,d0.w) / rts  (as the game)
+        0x44FC, 0x0004, 0x4E75,           // armed: move #4,ccr (Z: "not cleared") / rts
+    };
+    return {{at, std::vector<uint16_t>(code.size(), 0xFFFF), code},
+            {R.at(0x0046CC), {0x43F8, 0xEEBF, 0x4A31, 0x0000}, {0x4EB9, (uint16_t)(at >> 16), (uint16_t)at, 0x4E71}}};
+}
+
+// "Shoot more bubbles": the bubble gum has one shot slot, $9D80 - "can fire" ($515C, weapon 2 at $51B4) answers
+// no while it is in use; the shot ($5118, type $65) is made in the slot it hands back in a1. MORE_BUBBLES_AT (free
+// code) looks for a free one of six: $9D40 (the plungers' last) and the five popcorn slots $9D80-$9E80.
+constexpr uint32_t MORE_BUBBLES_AT = 0x8C0;
+std::vector<RomPatch> more_bubbles_patches(const Rev& R) {
+    const uint32_t at = R.code + MORE_BUBBLES_AT;
+    const std::vector<uint16_t> code = {
+        0x43F8, 0x9D40, 0x7E05,           // lea $9D40.w,a1 / moveq #5,d7
+        0x4A51, 0x670E,                   // loop: tst.w (a1) / beq.s done     (free: Z set)
+        0x43E9, 0x0040, 0x51CF, 0xFFF6,   // lea $40(a1),a1 / dbf d7,loop
+        0x43F8, 0x9D80, 0x4A51,           // lea $9D80.w,a1 / tst.w (a1)       (none: Z clear, as the game)
+        0x4E75,                           // done: rts
+    };
+    return {{at, std::vector<uint16_t>(code.size(), 0xFFFF), code},
+            {R.at(0x0051BA), {0x43F8, 0x9D80, 0x4A51}, {0x4EB9, (uint16_t)(at >> 16), (uint16_t)at}}};
+}
+
 std::vector<RomPatch> endless_quack_patches(const Rev& R) { return {{R.at(0x005FDE), {0x5378, 0x8FA8}, {0x4E71, 0x4E71}}}; }
 
 // ---- widescreen (docs/re_qs_wide.md) --------------------------------------------------------------
@@ -244,10 +335,44 @@ std::vector<RomPatch> stream_patches(const Rev& R) {
     };
 }
 
-std::vector<RomPatch> wide_patches(const Rev& R, int E) {
+// The "spawns behind the player" option (see wide_patches): the enemy types it moves, how far beyond the wide view's left
+// edge (half a sprite's width), and the object field ($3E, unused by these types) that holds how far an object was moved,
+// which post_frame() makes up while it flies or walks in, so it acts where it would at 4:3.
+// swoop-in birds, the golden Scrooge statues, Egypt's guards, India's snake charmers (the one of a pair made behind
+// Donald, inside the 4:3 view; its basket $53 follows it by itself)
+constexpr uint16_t kBehindTypes[] = {0x0D, 0x7C, 0x4B, 0xB0, 0x79, 0x52};
+constexpr uint16_t kBehindRight = 0x79;   // ... this one comes up behind Donald on the right, as he walks left
+constexpr int kBehindMargin = 24;
+constexpr uint16_t kCatchUpField = 0x3E;
+constexpr uint16_t kDedupType = 0x4B;   // penguins: an entry is not made while a live object of its twin entry exists
+constexpr unsigned kCharmerExtra = 5;   // a snake charmer's steps clear of the terrain after catching up (55 px)
+// The statues ($B0) come in groups: they are all moved by the same distance, so they keep their spacing - the most any of
+// them needs, with kStatueReach the furthest right (screen x) one is moved from.
+constexpr int kStatueReach = 96;
+
+// A few words of 68000 code with short forward/backward branches to labels (the 8-bit displacement of Bcc.s / BSR.s)
+struct Asm {
+    std::vector<uint16_t> w;
+    std::map<std::string, size_t> at;
+    std::vector<std::pair<size_t, std::string>> fixups;
+    void put(std::initializer_list<uint16_t> v) { w.insert(w.end(), v.begin(), v.end()); }
+    void br(uint16_t op, const char* to) { fixups.push_back({w.size(), to}); w.push_back(op); }
+    void label(const char* n) { at[n] = w.size(); }
+    std::vector<uint16_t> finish() {
+        for (const auto& f : fixups) {
+            const int d = 2 * ((int)at.at(f.second) - (int)f.first - 1);
+            if (d < -128 || d > 126 || d == 0) w.clear();   // out of a short branch's reach: no patch (patches_safe fails)
+            else w[f.first] |= (uint8_t)d;
+        }
+        return w;
+    }
+};
+
+// `fix`: the "enemies that spawn behind the player" option (GameConfig key "spawn_fix"): see the block below
+std::vector<RomPatch> wide_patches(const Rev& R, int E, bool fix) {
     // Objects are kept alive in world X [camX-256, camX+512); from 2:1 on (right edge camX+384) the
     // right spawn trigger also looks one 128-px cell further so enemies don't appear at the edge.
-    const bool far = E > 40;
+    const bool far = E >= kFarFrom;
     // Added code goes to free ROM (R.code); the jumps into the game's own code use this release's addresses.
     const uint32_t base = R.code;
     auto hi = [](uint32_t a) { return (uint16_t)(a >> 16); };
@@ -274,6 +399,12 @@ std::vector<RomPatch> wide_patches(const Rev& R, int E) {
     for (uint32_t a : {0x010FF4u, 0x011042u, 0x01108Eu}) p.push_back({R.at(a), {0x0468, 0x0020, 0x0010}, {0x0468, wrap_l, 0x0010}});
     p.push_back({R.at(0x010F12), {0x0469, 0x0020, 0x0010}, {0x0469, wrap_l, 0x0010}});
     p.push_back({R.at(0x0110FA), {0x0440, 0x0020}, {0x0440, wrap_l}});
+    // Duckburg's Mickey blimp ($17, a background sprite): it waits hidden at camera X - $1C ($D7D4, just past the 4:3
+    // left edge), then crosses the sky from there or from camera X - $1C + $178 = +348 (the right edge), and hides again
+    // when the on-screen test says it has left ($D76E, made wide below). Both starts move out by E, so it comes in from
+    // beyond the wide view's edges instead of appearing (and vanishing) inside it.
+    p.push_back({R.at(0x00D7DA), {0x0468, 0x001C, 0x0010}, {0x0468, (uint16_t)(0x1C + E), 0x0010}});
+    p.push_back({R.at(0x00D7F6), {0x0668, 0x0178, 0x0010}, {0x0668, (uint16_t)(0x178 + 2 * E), 0x0010}});
     p.push_back({R.at(0x011FEC), {0x0C41, 0x0160}, {0x0C41, wrap_r}});
     p.push_back({R.at(0x011FF4), {0x0C41, 0x0140}, {0x0C41, (uint16_t)(0x140 + E)}});
     // Old "far off screen" limits that a wide view reaches: player shots are deleted outside
@@ -288,9 +419,12 @@ std::vector<RomPatch> wide_patches(const Rev& R, int E) {
         p.push_back({R.at(0x00597E), {0x0641, 0x01C0}, {0x0641, (uint16_t)(0x1C0 + 2 * d)}});
         for (uint32_t a : {0x00CD52u, 0x00CE92u}) p.push_back({R.at(a), {0x0C40, 0x01A0}, {0x0C40, (uint16_t)(0x1A0 + d)}});
         for (uint32_t a : {0x00CDB0u, 0x00CF02u}) p.push_back({R.at(a), {0x0C40, 0xFFA0}, {0x0C40, (uint16_t)(-0x60 - d)}});
-        p.push_back({R.at(0x013A6E), {0x0C40, 0xFFC0}, {0x0C40, (uint16_t)(-0x40 - d)}});
+        if (!fix) p.push_back({R.at(0x013A6E), {0x0C40, 0xFFC0}, {0x0C40, (uint16_t)(-0x40 - d)}});
         p.push_back({R.at(0x013AD6), {0x0C40, 0x0180}, {0x0C40, (uint16_t)(0x180 + d)}});
     }
+    // (with the "spawns behind the player" option the walkers' left limit moves out beyond where the option puts the
+    // golden Scrooge statues, so that they walk in from there - see that block)
+    if (fix) p.push_back({R.at(0x013A6E), {0x0C40, 0xFFC0}, {0x0C40, (uint16_t)(-0x40 - (kStatueReach + E + kBehindMargin))}});
     if (far) {
         // Right trigger ($19C08, camera X crossing a 128-px cell boundary to the right): the original column
         // (X+$180)>>7 and the far one (X+$200)>>7 both run (wrapper at $7B400). Spawn entries are filed by
@@ -311,71 +445,271 @@ std::vector<RomPatch> wide_patches(const Rev& R, int E) {
             0x4E75,                                           // rts
         };
         p.push_back({base + WRAPPER_AT, std::vector<uint16_t>(wrap.size(), 0xFFFF), wrap});
-        // (the trigger code at TRIGGER below jumps to the wrapper)
-        // In $19C5E's entry loop, before the free-slot search: a2 = entry+1 (x at 6(a2)), 6(sp) = column
-        // (saved d2), 20(sp) = $19C52 when called from the column loop, 24(sp) = that loop's caller.
-        // d3/d6 are free here.
+    }
+    {
+        // Entry hook (HOOK_AT), in $19C5E's entry loop before the free-slot search: a2 = entry+1 (x at 6(a2)), 6(sp) =
+        // column (saved d2), 20(sp) = $19C52 when called from the column loop, 24(sp) = that loop's caller. d3/d6 are
+        // free here. The passes are told apart by their return addresses (the wrapper's, the left trigger's), which
+        // nothing else pushes - the area-start spawner ($19D5A) uses the same loop.
         // The vertical trigger's extra column (X>>7)+4 (`$19BEA` below) leaves deferred entries too: 4:3 never
         // creates them from there, and they would appear inside the view.
+        // Left trigger (TRIGGER below): the mirror image. The 4:3 column (X-$71)>>7 and the wide one a cell further
+        // left both run. Entries filed more than 256 px right of their cell's start (Egypt's guards $79 that come
+        // up behind Donald as he walks left: at 4:3 they are made off the right edge) are deferred to the 4:3
+        // column's pass - created a cell early they stood in the middle of the view.
         const uint32_t col_loop = R.at(0x019C52), vert_trigger = R.at(0x019BFC), free_slot = R.at(0x019D7C);
         const uint32_t orig_pass = base + WRAPPER_AT + 0x0C, far_pass = base + WRAPPER_AT + 0x18;   // $7B40C / $7B418 in REV 00
-        std::vector<uint16_t> hook = {
-            0x0CAF, hi(col_loop), lo(col_loop), 0x0014,   //  0 cmpi.l #$19C52,20(sp)   column loop?
-            0x6700,                           //  4 beq.s loop
-            0x0CAF, hi(vert_trigger), lo(vert_trigger), 0x0014,   //  5 cmpi.l #$19BFC,20(sp)   vertical trigger?
-            0x6600,                           //  9 bne.s go
-            0x3C2C, 0x0024, 0xEE46, 0x5846,   // 10 move.w $24(a4),d6 / asr.w #7,d6 / addq.w #4,d6
-            0xBC6F, 0x0006,                   // 14 cmp.w 6(sp),d6                    its extra column?
-            0x6600, 0x6000,                   // 16 bne.s go / bra.s far
-            0x0CAF, hi(orig_pass), lo(orig_pass), 0x0018,   // 18 loop: cmpi.l #$7B40C,24(sp)   original-column pass?
-            0x6700,                           // 22 beq.s orig
-            0x0CAF, hi(far_pass), lo(far_pass), 0x0018,   // 23 cmpi.l #$7B418,24(sp)   far pass?
-            0x6600,                           // 27 bne.s go
-            0x6100, 0x6B00, 0x6000,           // 28 far: bsr.s deferred / bmi.s skip / bra.s go
-            0x7C00, 0x6600,                   // 31 orig: moveq #0,d6 / bne.s go   (SPAWN_ALL_FLAG: #1 = all entries)
-            0x6100, 0x6A00,                   // 33 bsr.s deferred / bpl.s skip
-            0x47F8, 0x9000, 0x3C3C, 0x002F,   // 35 go: lea $9000.w,a3 / move.w #$2f,d6 (as the original)
-            0x4EF9, hi(free_slot), lo(free_slot),   // 39 jmp $19D7C (free slot search, carry = none)
-            0x003C, 0x0001, 0x4E75,           // 42 skip: ori #1,ccr / rts
-            0x0C12, 0x0087, 0x6604,           // 45 deferred: cmpi.b #$87,(a2) / bne.s +4
-            0x7CFF, 0x4E75,                   // 48 moveq #-1,d6 / rts                 a vine: deferred
-            0x1C2A, 0x0006, 0xE14E,           // 50 move.b 6(a2),d6 / lsl.w #8,d6
-            0x1C2A, 0x0007,                   // 53 move.b 7(a2),d6                   entry x
-            0x362F, 0x000A, 0xEF4B, 0x9C43,   // 55 move.w 10(sp),d3 / lsl.w #7,d3 / sub.w d3,d6
-            0x0646, 0x00C0,                   // 59 addi.w #192,d6   (< 0: more than 192 px left of its cell)
-            0x4E75,                           // 61 rts
-        };
-        auto bra = [&](size_t at, size_t target) { hook[at] |= (uint8_t)(2 * ((int)target - (int)at - 1)); };
-        bra(4, 18); bra(9, 35); bra(16, 35); bra(17, 28); bra(22, 31); bra(27, 35);
-        bra(28, 45); bra(29, 42); bra(30, 35); bra(32, 35); bra(33, 45); bra(34, 42);
-        static_assert(SPAWN_ALL_AT == HOOK_AT + 31 * 2, "flag word = hook word 31");
-        p.push_back({base + HOOK_AT, std::vector<uint16_t>(hook.size(), 0xFFFF), hook});
-        p.push_back({R.at(0x019C92), {0x47F8, 0x9000, 0x3C3C, 0x002F, 0x4EBA, 0x00E0},
-                                     {0x4EB9, hi(base + HOOK_AT), lo(base + HOOK_AT), 0x4E71, 0x4E71, 0x4E71}});
+        const uint32_t left_orig = R.trigger() + 0x10, left_far = R.trigger() + 0x1C;
+        Asm h;
+        h.br(0x6000, "start");
+        h.label("all");  h.put({(uint16_t)(far ? 0x7C00 : 0x7C01), 0x4E75});   // SPAWN_ALL_FLAG: moveq #0/1,d6 / rts (no far pass: all)
+        h.label("lall"); h.put({0x7C00, 0x4E75});               // LEFT_FLAG:      moveq #0/1,d6 / rts
+        h.label("start");
+        h.put({0x0CAF, hi(col_loop), lo(col_loop), 0x0014});    // cmpi.l #$19C52,20(sp)   column loop?
+        h.br(0x6700, "loop");
+        h.put({0x0CAF, hi(vert_trigger), lo(vert_trigger), 0x0014});   // cmpi.l #$19BFC,20(sp)   vertical trigger?
+        h.br(0x6600, "go");
+        h.put({0x3C2C, 0x0024, 0xEE46, 0x5846,                  // move.w $24(a4),d6 / asr.w #7,d6 / addq.w #4,d6
+               0xBC6F, 0x0006});                                // cmp.w 6(sp),d6          its extra column?
+        h.br(0x6600, "go");
+        h.label("far");
+        h.br(0x6100, "deferred"); h.br(0x6B00, "skip");         // bsr deferred / bmi skip
+        h.label("go");
+        {
+            // (with the spawn option the free slot search is reached through DEDUP_AT, the penguins' twin check)
+            const uint32_t next = fix ? base + DEDUP_AT : free_slot;
+            h.put({0x47F8, 0x9000, 0x3C3C, 0x002F,              // lea $9000.w,a3 / move.w #$2f,d6 (as the original)
+                   0x4EF9, hi(next), lo(next)});                // jmp $19D7C (free slot search, carry = none)
+        }
+        h.label("skip");
+        h.put({0x003C, 0x0001, 0x4E75});                        // ori #1,ccr / rts
+        h.label("loop");
+        h.put({0x0CAF, hi(orig_pass), lo(orig_pass), 0x0018});  // cmpi.l #$7B40C,24(sp)   right: original-column pass?
+        h.br(0x6700, "orig");
+        h.put({0x0CAF, hi(far_pass), lo(far_pass), 0x0018});    // cmpi.l #$7B418,24(sp)   right: far pass?
+        h.br(0x6700, "far");
+        h.put({0x0CAF, hi(left_orig), lo(left_orig), 0x0018});  // cmpi.l #..,24(sp)       left: 4:3 column pass?
+        h.br(0x6700, "lorig");
+        h.put({0x0CAF, hi(left_far), lo(left_far), 0x0018});    // cmpi.l #..,24(sp)       left: wide column pass?
+        h.br(0x6600, "go");
+        h.br(0x6100, "rdeferred"); h.br(0x6B00, "skip"); h.br(0x6000, "go");
+        h.label("orig");
+        h.br(0x6100, "all"); h.br(0x6600, "go");                // bsr all / bne go
+        h.br(0x6100, "deferred"); h.br(0x6A00, "skip"); h.br(0x6000, "go");
+        h.label("lorig");
+        h.br(0x6100, "lall"); h.br(0x6600, "go");
+        h.br(0x6100, "rdeferred"); h.br(0x6A00, "skip"); h.br(0x6000, "go");
+        h.label("deferred");                                    // < 0: more than 192 px left of its cell, or a vine
+        h.put({0x0C12, 0x0087, 0x6604,                          // cmpi.b #$87,(a2) / bne.s +4
+               0x7CFF, 0x4E75,                                  // moveq #-1,d6 / rts
+               0x1C2A, 0x0006, 0xE14E, 0x1C2A, 0x0007,          // move.b 6(a2),d6 / lsl.w #8,d6 / move.b 7(a2),d6   entry x
+               0x362F, 0x000A, 0xEF4B, 0x9C43,                  // move.w 10(sp),d3 / lsl.w #7,d3 / sub.w d3,d6
+               0x0646, 0x00C0, 0x4E75});                        // addi.w #192,d6 / rts
+        h.label("rdeferred");                                   // < 0: more than 256 px right of its cell's start
+        h.put({0x1C2A, 0x0006, 0xE14E, 0x1C2A, 0x0007,          // entry x
+               0x362F, 0x000A, 0xEF4B, 0x9646,                  // move.w 10(sp),d3 / lsl.w #7,d3 / sub.w d6,d3
+               0x0643, 0x0100, 0x4E75});                        // addi.w #256,d3 / rts
+        const std::vector<uint16_t> hook = h.finish();
+        if (!hook.empty() && fix) {
+            // Penguins ($4B): the level files some of them twice - the same type, Y and X in two cells, one for each
+            // direction Donald comes from - and the wider despawn window keeps the first one alive, so walking back and
+            // forth over a cell boundary made a second (and a third...) penguin at the same spot. An entry whose twin
+            // (same Y and X) already has a live object is not created now: it is skipped as if it were deferred (the
+            // spawn flag stays clear), so it comes back once the first penguin has gone, as a lone one does.
+            // The object's $2E points at its entry's spawned byte (entry + 3); Y is at +5 and X at +7 of the entry,
+            // i.e. 2 / 4 from that byte and 4 / 6 from a2 (entry + 1); the records are byte-aligned.
+            Asm t;
+            t.put({0x0C12, kDedupType});                        // cmpi.b #$4B,(a2)        a penguin?
+            t.br(0x6600, "fs");                                 // bne.s fs
+            t.put({0x48E7, 0x0080,                              // movem.l a0,-(sp)
+                   0x47F8, 0x9000, 0x3C3C, 0x002F});            // lea $9000.w,a3 / move.w #$2f,d6
+            t.label("dl");
+            t.put({0x0C53, kDedupType});                        // cmpi.w #$4B,(a3)        a live penguin?
+            t.br(0x6600, "dn");                                 // bne.s dn
+            t.put({0x306B, 0x002E,                              // movea.w $2E(a3),a0      its entry's spawned byte
+                   0x162A, 0x0004, 0xB628, 0x0002});            // move.b 4(a2),d3 / cmp.b 2(a0),d3    Y high
+            t.br(0x6600, "dn");
+            t.put({0x162A, 0x0005, 0xB628, 0x0003});            // Y low
+            t.br(0x6600, "dn");
+            t.put({0x162A, 0x0006, 0xB628, 0x0004});            // X high
+            t.br(0x6600, "dn");
+            t.put({0x162A, 0x0007, 0xB628, 0x0005});            // X low
+            t.br(0x6600, "dn");
+            t.put({0x4CDF, 0x0100,                              // movem.l (sp)+,a0       a twin is alive: skip this entry
+                   0x003C, 0x0001, 0x4E75});                    // ori #1,ccr / rts
+            t.label("dn");
+            t.put({0x47EB, 0x0040, 0x5346});                    // lea $40(a3),a3 / subq.w #1,d6
+            t.br(0x6A00, "dl");                                 // bpl.s dl
+            t.put({0x4CDF, 0x0100,                              // movem.l (sp)+,a0       no twin: create it
+                   0x47F8, 0x9000});                            // lea $9000.w,a3
+            t.label("fs");
+            t.put({0x3C3C, 0x002F,                              // move.w #$2f,d6         (flags as the game's own)
+                   0x4EF9, hi(free_slot), lo(free_slot)});      // jmp $19D7C (free slot search, carry = none)
+            const std::vector<uint16_t> dedup = t.finish();
+            if (dedup.size() * 2 <= 0x100) p.push_back({base + DEDUP_AT, std::vector<uint16_t>(dedup.size(), 0xFFFF), dedup});
+        }
+        if (!hook.empty()) {
+            p.push_back({base + HOOK_AT, std::vector<uint16_t>(hook.size(), 0xFFFF), hook});
+            p.push_back({R.at(0x019C92), {0x47F8, 0x9000, 0x3C3C, 0x002F, 0x4EBA, 0x00E0},
+                                         {0x4EB9, hi(base + HOOK_AT), lo(base + HOOK_AT), 0x4E71, 0x4E71, 0x4E71}});
+        }
+    }
+    if (far) {
         // ...and the vertical trigger spawns 6 cell columns instead of 5 ((X>>7)-1 .. +4), so objects in that
         // extra column also appear when they come into range by scrolling up or down
         p.push_back({R.at(0x019BEA), {0x7E04}, {0x7E05}});
     }
+    if (fix) {
+        // Option "spawns behind the player" (GameConfig key "spawn_fix", off by default). Some spawn entries are filed far
+        // left of their cell, and the right trigger's original-column pass (the 4:3 one) creates them behind Donald as
+        // the camera moves right: Mexico's swoop-in bird $0D just off the 4:3 left edge (x -1..-3, inside a wide view),
+        // the Island's golden Scrooge statues $B0 even inside the 4:3 view. With the option on they are still created
+        // then - so they act at the same moment and place relative to Donald as at 4:3 - but put just beyond the wide
+        // view's left edge: x = camera X - E - kBehindMargin (the margin: half a sprite's width). Only enemy types that
+        // move (the swoop-in birds $0D / $7C / $4B, the statues $B0), and only those that would otherwise be created
+        // inside or at the view on its left half; everything else - platforms, vines, items - stays where it is.
+        // The entry loop writes the new object's X at $19CC4 (`move.b (a2)+,$11(a3)` / `bra.s $19CCE`): that is
+        // replaced by a jsr to POST_AT, which does the same, then checks the caller (as the spawn hook does: 20(sp) =
+        // the column loop, 24(sp) = the wrapper's original-column return) and moves the object. Below 16:9 there is no
+        // far pass: the trigger then goes through the wrapper too (the original column only), so the pass is known.
+        if (!far) {
+            const std::vector<uint16_t> wrap = {
+                0x3F00, 0x0640, 0x0180, 0x4EB9, hi(spawn_col), lo(spawn_col),   // move.w d0,-(sp) / addi.w #$180,d0 / jsr $19C20
+                0x301F, 0x4E75,                                                 // move.w (sp)+,d0 / rts
+            };
+            p.push_back({base + WRAPPER_AT, std::vector<uint16_t>(wrap.size(), 0xFFFF), wrap});
+        }
+        const uint32_t col_loop = R.at(0x019C52), orig_pass = base + WRAPPER_AT + 0x0C, left_orig = R.trigger() + 0x10;
+        const uint16_t out = (uint16_t)(E + kBehindMargin);
+        Asm a;
+        a.put({0x175A, 0x0011,                                  // move.b (a2)+,$11(a3)       (as the game)
+               0x5897,                                          // addq.l #4,(sp)             return to $19CCE (the bra.s target)
+               0x48E7, 0x1200,                                  // movem.l d3/d6,-(sp)
+               0x1C2B, 0x0001});                                // move.b 1(a3),d6            type
+        for (uint16_t type : kBehindTypes) {
+            a.put({0x0C06, type});                              // cmpi.b #type,d6
+            a.br(0x6700, "type");                               // beq.s type
+        }
+        a.label("done");
+        a.put({0x4CDF, 0x0048, 0x4E75});                        // movem.l (sp)+,d3/d6 / rts
+        a.label("type");
+        a.put({0x426B, kCatchUpField,                           // clr.w $3E(a3)              nothing to catch up (yet)
+               0x0CAF, hi(col_loop), lo(col_loop), 0x001C});     // cmpi.l #$19C52,28(sp)      the column loop?
+        a.br(0x6600, "done");
+        a.put({0x3C2B, 0x0010, 0x3638, 0x8524, 0x9C43});         // move.w $10(a3),d6 / move.w $8524.w,d3 / sub.w d3,d6   screen x
+        a.put({0x0CAF, hi(orig_pass), lo(orig_pass), 0x0020});   // cmpi.l #orig,32(sp)        the right trigger's original-column pass?
+        a.br(0x6700, "right");
+        // the left trigger's 4:3-column pass: a guard made inside the view's right half goes just beyond its right edge
+        a.put({0x0CAF, hi(left_orig), lo(left_orig), 0x0020});   // cmpi.l #left,32(sp)
+        a.br(0x6600, "done");
+        a.put({0x0C2B, kBehindRight, 0x0001});                   // cmpi.b #$79,1(a3)
+        a.br(0x6600, "done");
+        a.put({0x0C46, 0x00A0});                                 // cmpi.w #160,d6
+        a.br(0x6F00, "done");                                    // ble.s done
+        a.put({0x0C46, (uint16_t)(320 + out)});                  // cmpi.w #320+out,d6
+        a.br(0x6C00, "done");                                    // bge.s done                 (already beyond the edge)
+        a.put({0x0643, (uint16_t)(320 + out), 0x3743, 0x0010,    // addi.w #320+out,d3 / move.w d3,$10(a3)
+               0x4446, 0x0646, (uint16_t)(320 + out + 0x800),    // neg.w d6 / addi.w #320+out+$800,d6   distance, bit 11: to the left
+               0x3746, kCatchUpField});                          // move.w d6,$3E(a3)
+        a.br(0x6000, "done");
+        a.label("right");
+        a.put({0x0C2B, kBehindRight, 0x0001});                   // cmpi.b #$79,1(a3)
+        a.br(0x6700, "end");
+        a.put({0x0C46, (uint16_t)-out});                        // cmpi.w #-out,d6
+        a.br(0x6F00, "end");                                   // ble.s done                 (already beyond the edge)
+        a.put({0x0C2B, 0x00B0, 0x0001});                        // cmpi.b #$B0,1(a3)          a statue?
+        a.br(0x6700, "statue");
+        a.put({0x0C46, 0x00A0});                                // cmpi.w #160,d6
+        a.br(0x6C00, "end");                                   // bge.s done                 (right half: as it is)
+        a.put({0x0443, out, 0x3743, 0x0010,                     // subi.w #out,d3 / move.w d3,$10(a3)   x = camera X - out
+               0x0646, out, 0x3746, kCatchUpField});            // addi.w #out,d6 / move.w d6,$3E(a3)   how far it was moved
+        a.br(0x6000, "end");
+        const uint16_t reach = (uint16_t)(kStatueReach + out);
+        a.label("statue");
+        a.put({0x0C46, (uint16_t)kStatueReach});                // cmpi.w #reach,d6
+        a.br(0x6C00, "end");                                   // bge.s done
+        a.put({0x046B, reach, 0x0010,                           // subi.w #reach,$10(a3)      all moved by the same distance
+               0x377C, reach, kCatchUpField});                  // move.w #reach,$3E(a3)
+        a.label("end");
+        a.put({0x4CDF, 0x0048, 0x4E75});                        // movem.l (sp)+,d3/d6 / rts
+        const std::vector<uint16_t> post = a.finish();
+        if (!post.empty() && post.size() * 2 <= WAKE_AT - POST_AT) {   // (a branch out of reach: leave the game as it is)
+            p.push_back({base + POST_AT, std::vector<uint16_t>(post.size(), 0xFFFF), post});
+            p.push_back({R.at(0x019CC4), {0x175A, 0x0011, 0x6004}, {0x4EB9, hi(base + POST_AT), lo(base + POST_AT)}});
+        }
+        // A moved snake charmer $52 stands behind India's block stacks. It steps 11 px in the direction of bit 0 of $36
+        // ($1013A; its basket $2A(a0) has the same bit), then the terrain probe ($158CA) lifts it onto what is under
+        // its feet and reports a wall (d7 = 6 -> $1018A: the step undone, the direction flipped). So it climbed onto
+        // the blocks, stayed up there and paced to and fro. While $3E is not 0 - catching up, then a few more steps
+        // (post_frame) - it faces right (CHARM_AT) and the probe is skipped (CWALL_AT): it walks through at the
+        // height it was made at, as it would never have been there at 4:3.
+        const uint32_t wall = R.at(0x01018A), probe = R.at(0x0158CA);
+        const std::vector<uint16_t> charm = {
+            0x4A68, kCatchUpField, 0x670C,                       // tst.w $3E(a0) / beq.s plain
+            0x08A8, 0x0000, 0x0036,                              // bclr #0,$36(a0)
+            0x3268, 0x002A, 0x08A9, 0x0000, 0x0036,              // move.w $2A(a0),a1 / bclr #0,$36(a1)
+            0x0828, 0x0000, 0x0036, 0x4E75,                      // plain: btst #0,$36(a0) / rts   (as the game)
+        };
+        const std::vector<uint16_t> cwall = {
+            0x4A68, kCatchUpField, 0x6612,                       // tst.w $3E(a0) / bne.s ret
+            0x4EB9, hi(probe), lo(probe),                        // jsr $158CA          (as the game)
+            0x0C47, 0x0006, 0x6606,                              // cmpi.w #6,d7 / bne.s ret
+            0x4EF9, hi(wall), lo(wall),                          // jmp $1018A
+            0x4E75,                                              // ret: rts
+        };
+        p.push_back({base + CHARM_AT, std::vector<uint16_t>(charm.size(), 0xFFFF), charm});
+        p.push_back({base + CWALL_AT, std::vector<uint16_t>(cwall.size(), 0xFFFF), cwall});
+        p.push_back({R.at(0x01013A), {0x0828, 0x0000, 0x0036}, {0x4EB9, hi(base + CHARM_AT), lo(base + CHARM_AT)}});
+        // (bsr $158CA: its displacement differs between the releases)
+        for (uint32_t at : {0x010148u, 0x01015Au}) {
+            const uint32_t here = R.at(at);
+            p.push_back({here, {0x4EBA, (uint16_t)(probe - (here + 2)), 0x0C47, 0x0006, (uint16_t)(at == 0x010148u ? 0x6738 : 0x6726)},
+                               {0x4EF9, hi(base + CWALL_AT), lo(base + CWALL_AT), 0x4E71, 0x4E71}});
+        }
+    }
+    {
+        // The golden Scrooge statues $B0, asleep (state 1, $ECC4): they only test Donald's distance and wake within
+        // 120 px ($78 / -$78) - shots fly through them, which shows on a wide view, where they stand in sight long
+        // before that. The state now runs the shot test the other states use ($B8CE: a1 = the shot, d7 != 0) and
+        // hands the shot the statue as the awake ones do (shot $30 = statue), so a plunger bounces off and drops.
+        // $0F (the test's result, which the awake states act on) is cleared again: the statue stays asleep. Its
+        // sleeping frame has no hit box ($25 = 0, an index into the box table), so it borrows the walking one's ($C7)
+        // for the test.
+        // With the spawn option the distance is measured from where a moved statue will be ($3E px further on): it
+        // wakes at the moment and place it does at 4:3 and walks in from beyond the view's edge, like the birds.
+        const uint32_t shot_test = R.at(0x00B8CE);
+        std::vector<uint16_t> wake = {
+            0x117C, 0x00C7, 0x0025,                              // move.b #$C7,$25(a0)   the walking statue's hit box
+            0x4EB9, hi(shot_test), lo(shot_test),                // jsr $B8CE
+            0x670A,                                              // beq.s none
+            0x3348, 0x0030, 0x08E8, 0x0004, 0x000E,              // move.w a0,$30(a1) / bset #4,$E(a0)
+            0x4228, 0x000F, 0x4228, 0x0025,                      // none: clr.b $F(a0) / clr.b $25(a0)
+            0x3038, 0xA2D0, 0x9068, 0x0010,                      // move.w $A2D0.w,d0 / sub.w $10(a0),d0   (as the game)
+        };
+        if (fix) wake.insert(wake.end(), {0x2F01, 0x3228, kCatchUpField, 0x0241, 0x07FF,   // move.l d1,-(sp) / move.w $3E(a0),d1 / andi.w #$7FF,d1
+                                          0x9041, 0x221F});                                 // sub.w d1,d0 / move.l (sp)+,d1
+        wake.push_back(0x4E75);
+        p.push_back({base + WAKE_AT, std::vector<uint16_t>(wake.size(), 0xFFFF), wake});
+        p.push_back({R.at(0x00ECC4), {0x3038, 0xA2D0, 0x9068, 0x0010}, {0x4EB9, hi(base + WAKE_AT), lo(base + WAKE_AT), 0x4E71}});
+    }
     // Column trigger ($19C08, the camera crossed a 128-px boundary; d2 = its X step): `tst.w d2 / bmi.s` at $19C12
     // now goes to TRIGGER. Left: the column one cell further left, (X-$F1)>>7, so objects appear before the widened
     // left edge. Right: the far wrapper ($7B400) from 2:1 on, else the original (X+$180)>>7.
-    // Turning round, the widened passes skip a column 4:3 creates at once: moving left, (X-$71)>>7 is created
-    // only at the next boundary (4:3 creates it here); moving right from 2:1 on, the original-column pass makes
-    // only deferred entries, assuming the far pass made the rest a cell earlier. Entries that have meanwhile gone
-    // (deleted off screen, like the Egypt bridge pieces $75/$8E) or that only appear on the way back are then
-    // missing until the camera crosses back. post_frame() sees each crossing a frame before the spawner does and,
-    // for the first crossing after a turn, switches on the 4:3 left column (LEFT_FLAG) or, to the right, the
-    // full original-column pass (SPAWN_ALL_FLAG) - so that crossing creates what 4:3 creates.
+    // Turning round, the widened passes skip a column 4:3 creates at once: moving left, the 4:3 column's pass makes
+    // only deferred entries, assuming the wide pass made the rest a cell earlier; moving right from 16:9 on, the same
+    // for the original-column pass. Entries that have meanwhile gone (deleted off screen, like the Egypt bridge
+    // pieces $75/$8E) or that only appear on the way back are then missing until the camera crosses back.
+    // post_frame() sees each crossing a frame before the spawner does and, for the first crossing after a turn,
+    // makes that pass create all its entries (LEFT_FLAG / SPAWN_ALL_FLAG) - so that crossing creates what 4:3 creates.
     {
         std::vector<uint16_t> t = {
             0x4A42, 0x6A1A,                   // 00 tst.w d2 / bpl.s right (1E)
-            LEFT_OFF,                         // 04 LEFT_FLAG: bra.s plain (14), or nop
-            0x3F00, 0x0440, 0x0071,           // 06 move.w d0,-(sp) / subi.w #$71,d0      the 4:3 column
-            0x4EB9, hi(spawn_col), lo(spawn_col),   // 0C jsr $19C20
-            0x301F,                           // 12 move.w (sp)+,d0
-            0x0440, 0x00F1,                   // 14 plain: subi.w #$F1,d0                  one cell further
-            0x4EF9, hi(spawn_col), lo(spawn_col)};   // 18 jmp $19C20
-        if (far) t.insert(t.end(), {0x4EF9, hi(base + WRAPPER_AT), lo(base + WRAPPER_AT)});   // 1E right: jmp wrapper
+            0x3F00, 0x0440, 0x0071,           // 04 move.w d0,-(sp) / subi.w #$71,d0      the 4:3 column
+            0x4EB9, hi(spawn_col), lo(spawn_col),   // 0A jsr $19C20                      (returns to 10)
+            0x301F, 0x0440, 0x00F1,           // 10 move.w (sp)+,d0 / subi.w #$F1,d0      one cell further
+            0x4EB9, hi(spawn_col), lo(spawn_col),   // 16 jsr $19C20                      (returns to 1C)
+            0x4E75};                          // 1C rts
+        if (far || fix) t.insert(t.end(), {0x4EF9, hi(base + WRAPPER_AT), lo(base + WRAPPER_AT)});   // 1E right: jmp wrapper
         else t.insert(t.end(), {0x0640, 0x0180, 0x4EF9, hi(spawn_col), lo(spawn_col)});   // 1E addi.w #$180,d0 / jmp
         p.push_back({R.trigger(), std::vector<uint16_t>(t.size(), 0xFFFF), t});
         p.push_back({R.at(0x019C14), {0x6B06, 0x0640, 0x0180, 0x6004, 0x0440, 0x0071},
@@ -414,13 +748,23 @@ std::vector<RomPatch> wide_patches(const Rev& R, int E) {
     const uint32_t kWideCallers[] = {
         0x00FB7A,   // bridge / platform pieces $75 $78 $86 $8E: hidden until on screen
         0x00E6EC,   // $0A falls from the top, hides and resets once off screen
+        0x00D772,   // $17 the Duckburg blimp: hides once off screen (see its starts above)
         0x00DB60, 0x00DCD0, 0x010832, 0x012258, 0x013F74,   // deleted once off screen
     };
+    // $10 the garbage can worms stand still while their head is off screen. A worm leaps from its can to the next one,
+    // 176 px away, so with the view's own bounds one by the edge froze stretched out in mid-air, its body in view
+    // (4:3 does that too, off screen). These callers get 192 px more on both sides.
+    const uint32_t kWormCallers[] = {0x00D308, 0x00D340, 0x00D444, 0x00D4F6};
     std::vector<uint16_t> on = {0x3028, 0x0010, 0x3228, 0x0014, 0x9078, 0x8524};
     std::vector<size_t> to_wide;
     for (uint32_t r : kWideCallers) {
         on.insert(on.end(), {0x0C97, hi(R.at(r)), lo(R.at(r)), 0x6700});   // cmpi.l #r,(a7) / beq.s wide
         to_wide.push_back(on.size() - 1);
+    }
+    std::vector<size_t> to_worm;
+    for (uint32_t r : kWormCallers) {
+        on.insert(on.end(), {0x0C97, hi(R.at(r)), lo(R.at(r)), 0x6700});
+        to_worm.push_back(on.size() - 1);
     }
     std::vector<size_t> to_off;
     auto bound = [&](uint16_t lo, uint16_t hi, uint16_t reg) {   // cmpi.w #lo / ble.s off / cmpi.w #hi / bge.s off
@@ -434,6 +778,10 @@ std::vector<RomPatch> wide_patches(const Rev& R, int E) {
     const size_t to_y = on.size() - 1;
     const size_t wide = on.size();
     bound((uint16_t)(-32 - E), (uint16_t)(352 + E), 0);
+    on.push_back(0x6000);   // bra.s ytest
+    const size_t to_y2 = on.size() - 1;
+    const size_t worm = on.size();
+    bound((uint16_t)(-224 - E), (uint16_t)(544 + E), 0);
     const size_t ytest = on.size();
     on.insert(on.end(), {0x9278, 0x8520});
     bound(0xFFF0, 0x00E0, 1);
@@ -442,16 +790,50 @@ std::vector<RomPatch> wide_patches(const Rev& R, int E) {
     on.insert(on.end(), {0x7001, 0x4E75});
     auto branch = [&](size_t at, size_t target) { on[at] |= (uint8_t)(2 * ((int)target - (int)at - 1)); };
     for (size_t at : to_wide) branch(at, wide);
+    for (size_t at : to_worm) branch(at, worm);
+    branch(to_y2, ytest);
     for (size_t at : to_off) branch(at, off);
     branch(to_y, ytest);
     const uint32_t ON_SCREEN = base + ON_SCREEN_AT;
     p.push_back({ON_SCREEN, std::vector<uint16_t>(on.size(), 0xFFFF), on});
     p.push_back({R.at(0x00E86E), {0x3028, 0x0010, 0x3228}, {0x4EF9, hi(ON_SCREEN), lo(ON_SCREEN)}});
+    // The electric spark $08 on Duckburg's power lines (Gyro's workshop): it only shows (and buzzes) while Donald is within
+    // 128 px of it ($E834: Donald X - its X, against $80 / -$80), so at 4:3 it covers the view and on a wide one it popped
+    // in well inside it. The distance grows by twice the extra width and 32 px, so it reaches beyond both edges of the
+    // view also while the camera leads Donald.
+    const uint16_t spark = (uint16_t)(0x80 + 2 * E + 32);
+    p.push_back({R.at(0x00E834), {0x9068, 0x0010, 0x0C40, 0x0080, 0x6E20, 0x0C40, 0xFF80},
+                 {0x9068, 0x0010, 0x0C40, spark, 0x6E20, 0x0C40, (uint16_t)-spark}});
+    // The attract intro. d: E, even (the sprites below move 2 px a frame).
+    // - The treasure pile $3A at the end of the cast scroll: Donald's object creates it when his timer ($38) is at $40
+    //   ($B0C8), at x $1E0 = just off the 4:3 edge ($B5DE), and it moves in for $40 frames ($B5F2) with the scroll, 1 px
+    //   a frame. All three grow by E: it is made earlier, off the wide view's edge, and ends up in the same place.
+    // - The title: Donald $36 walks in from x $40 for $3C frames ($B35E / $B37E), the plane $38 flies in from x $200
+    //   for $90 frames ($B480 / $B4A6). They start d further out and take d/2 frames longer.
+    {
+        const uint16_t d = (uint16_t)((E + 1) & ~1);
+        p.push_back({R.at(0x00B0C8), {0x0C68, 0x0040, 0x0038}, {0x0C68, (uint16_t)(0x40 + E), 0x0038}});
+        p.push_back({R.at(0x00B5DE), {0x317C, 0x01E0, 0x0010}, {0x317C, (uint16_t)(0x1E0 + E), 0x0010}});
+        p.push_back({R.at(0x00B5F2), {0x317C, 0x0040, 0x0038}, {0x317C, (uint16_t)(0x40 + E), 0x0038}});
+        p.push_back({R.at(0x00B35E), {0x317C, 0x0040, 0x0010}, {0x317C, (uint16_t)(0x40 - d), 0x0010}});
+        p.push_back({R.at(0x00B37E), {0x317C, 0x003C, 0x0038}, {0x317C, (uint16_t)(0x3C + d / 2), 0x0038}});
+        p.push_back({R.at(0x00B480), {0x317C, 0x0200, 0x0010}, {0x317C, (uint16_t)(0x200 + d), 0x0010}});
+        p.push_back({R.at(0x00B4A6), {0x317C, 0x0090, 0x0038}, {0x317C, (uint16_t)(0x90 + d / 2), 0x0038}});
+    }
+    // The map screen's airplane $B1: it starts at x -32 ($11918) and flies 2 px a frame ($11924) for the 180 frames the
+    // screen stays ($9D66, timer $A346), so at 4:3 it is cut off at both ends (the sprite spans x-60 .. x+43). Wide, it
+    // comes in from beyond the left edge and leaves completely past the right one: it starts at -E-48, flies 3 px a
+    // frame and the screen stays until its tail is past 320+E (16:9: 172 frames). The map itself stays centred.
+    p.push_back({R.at(0x011918), {0x317C, 0xFFE0, 0x0010, 0x317C, 0x0090, 0x0014, 0x317C, 0x0002, 0x0018},
+                 {0x317C, (uint16_t)(-48 - E), 0x0010, 0x317C, 0x0090, 0x0014, 0x317C, 0x0003, 0x0018}});
+    p.push_back({R.at(0x009D66), {0x31FC, 0x00B4, 0xA346}, {0x31FC, (uint16_t)((430 + 2 * E) / 3 + 2), 0xA346}});
     return p;
 }
 
 bool wide_gameplay(const MegaDrive& md) {
-    return (md.ram16(MODE_W) & 0x7FFF) == 5 && md.ram16(0xFFFF1A) == 1;
+    // mode 5, or 7: the attract demo (a level played from recorded input)
+    const uint16_t mode = md.ram16(MODE_W) & 0x7FFF;
+    return (mode == 5 || mode == 7) && md.ram16(0xFFFF1A) == 1;
 }
 // The frozen GAME OVER screen: the level and status bar stay on screen.
 bool game_over(const MegaDrive& md) {
@@ -526,10 +908,63 @@ void draw_far_columns(const MegaDrive& md, int line, uint8_t* buf, bool plane_b)
     }
 }
 
+// Screens that are a 320-px picture with sprites crossing it: the world map (mode 2), and the attract intro after its
+// cast scroll - Donald with the map, the map picture sliding in, the title (mode 1 step 3; module_state[4] counts the
+// frames since the scroll ended, see post_frame). They are shown wide so that the sprites cross the whole view (the
+// map's airplane, the title's Donald and plane); the planes hold leftovers beside the picture, which line_hook blanks.
+bool map_screen(const MegaDrive& md) { return (md.ram16(MODE_W) & 0x7FFF) == 0x02; }
+bool title_screen(const MegaDrive& md) {
+    return (md.ram16(MODE_W) & 0x7FFF) == 0x01 && md.ram16(0xFFFF1A) == 3 && md.ram16(0xFFFC04) != 0 && md.module_state[4] > 2;
+}
+
+// The pause screen (mode 8): the inventory panels on a green chequered background, the status bar below. Shown wide:
+// the status bar is laid out as in play (hud_map), and the background, whose pattern repeats every 16 px and fills
+// the picture's outer 16 px on both sides, is repeated outwards over the level's leftovers.
+bool pause_screen(const MegaDrive& md) { return (md.ram16(MODE_W) & 0x7FFF) == 0x08; }
+// The START / OPTIONS menu and the options screen (mode $0B): panels on the same green chequered background, which the
+// menu keeps in plane B (the pause screen keeps it in plane A), 320 px wide with nothing beyond it.
+bool menu_screen(const MegaDrive& md) { return (md.ram16(MODE_W) & 0x7FFF) == 0x0B; }
+// Both screens' background is a 16 x 16 px pattern and the picture's leftmost 16 px are always plain background (the
+// panels start further in; the right edge can hold a dialog box or a panel's border). So the margins on both sides
+// repeat those 16 px with the pattern's own phase: x - E (the picture's x) modulo 16 - the same for the left margin
+// (negative x) and the right one (x >= 320, a multiple of 16).
+void repeat_background(const MegaDrive& md, uint8_t* plane_a, uint8_t* plane_b) {
+    const int E = md.vdp.ext;
+    for (uint8_t* p : {plane_a, plane_b}) {
+        for (int i = 0; i < E; i++) p[i] = p[E + ((i - E) & 15)];
+        for (int i = E + 320; i < 320 + 2 * E; i++) p[i] = p[E + ((i - E) & 15)];
+    }
+}
+
 void line_hook(void* host, int line, uint8_t* plane_a, uint8_t* plane_b, uint8_t* sprites) {
     (void)sprites;
     MegaDrive& md = *(MegaDrive*)host;
-    if (!(wide_gameplay(md) || game_over(md))) return;
+    if (menu_screen(md) || (pause_screen(md) && !(md.vdp.reg[18] == 0x98 && line >= 192))) {
+        repeat_background(md, plane_a, plane_b);
+        return;
+    }
+    if (map_screen(md) || title_screen(md)) {
+        const int E = md.vdp.ext, TW = 320 + 2 * E;
+        memset(plane_a, 0, E);
+        memset(plane_a + E + 320, 0, E);
+        // The title's map picture (plane B, at plane x 320) slides in from the right: full-screen H scroll 0 -> -320,
+        // 16 px a frame, from the 4:3 edge. Wide, the line is moved right in proportion, so the picture comes in
+        // from the view's edge instead, and arrives at the same moment.
+        int left = E;   // where the picture's left edge is on this line
+        if (title_screen(md)) {
+            const int hmode = md.vdp.reg[11] & 3, hoff = hmode == 0 ? 0 : hmode == 3 ? line * 4 : (line & ~7) * 4;
+            const int sc = (int16_t)(md.vdp.vram16(((md.vdp.reg[13] & 0x3F) << 10) + hoff + 2) << 6) >> 6;   // 10 bits, signed
+            if (sc > -320 && sc <= 0) {
+                const int d = (320 + sc) * E / 320;
+                memmove(plane_b + d, plane_b, TW - d);
+                left = E + 320 + sc + d;
+            }
+        }
+        memset(plane_b, 0, std::min(left, TW));
+        if (left + 320 < TW) memset(plane_b + left + 320, 0, TW - left - 320);
+        return;
+    }
+    if (!(wide_gameplay(md) || game_over(md) || pause_screen(md))) return;
     const bool hud = md.vdp.reg[18] == 0x98 && line >= 192;
     if (md.vdp.ext > 80 && !hud) {
         draw_far_columns(md, line, plane_a, false);
@@ -558,13 +993,90 @@ public:
         return {{0x88C8DD94, 0x80000, "REV 00", "the QuackShot (World REV 00) ROM"},
                 {0x1801098B, 0x140000, "REV 01", "the QuackShot (World REV 01) ROM"}};
     }
+    // An MD+ soundtrack patch made for REV 00 carried over to REV 01. Such a patch hooks the game's sound request (at
+    // $7FED8, in the sound code at the end of the ROM) and adds its own code after the end of the ROM ($80000 in REV 00,
+    // $140000 in REV 01: $C0000 higher). REV 01 has the sound code higher by about that much, byte for byte: the sound
+    // data and the code at the very end $C0000 up, the ending bank and the start of the free space after it $C0006 (the
+    // SFX bank before them is 6 bytes longer); the data between them has moved by other amounts. So a change inside the
+    // ROM is carried over only where a known shift applies and only over bytes REV 01 has the same, the added code moves
+    // as it is, and the absolute addresses of its jumps into that part of the ROM move with it. Anything else is
+    // refused, not guessed at (the caller also checks the result's behaviour).
+    bool can_port_patch(int from, int to) const override { return from == 0 && to == 1; }
+    static int tail_shift(uint32_t a) {   // REV 01 address minus REV 00 address, -1: no known shift here
+        if (a >= 0x77000 && a < 0x7A0C4) return 0xC0000;
+        if (a >= 0x7A0C4 && a < 0x7AFFB) return 0xC0006;
+        if (a >= 0x7FD44 && a < 0x100000) return 0xC0000;   // (the last $2BC bytes of the ROM and what a patch adds after it)
+        return -1;
+    }
+    bool port_patch(const std::vector<PatchEdit>& edits, uint32_t from_size, const std::vector<uint8_t>* orig,
+                    std::vector<uint8_t>& target) const override {
+        if (from_size != 0x80000 || target.size() != 0x140000 || (orig && orig->size() != from_size)) return false;
+        std::vector<int16_t> ov(0x100000, -1);   // what the patch writes, by REV 00 address (-1: leaves alone)
+        for (const PatchEdit& e : edits) {
+            if ((uint64_t)e.offset + e.bytes.size() > ov.size()) return false;
+            for (size_t k = 0; k < e.bytes.size(); k++) ov[e.offset + k] = e.bytes[k];
+        }
+        ov[0x18E] = ov[0x18F] = -1;                // (the checksum is recalculated)
+        // jsr / jmp / lea (xxx).l into the part of the ROM that moves: the address moves with it
+        auto relocate = [](std::vector<uint8_t>& bytes) {
+            for (size_t k = 0; k + 6 <= bytes.size(); k += 2) {
+                const uint16_t op = (uint16_t)((bytes[k] << 8) | bytes[k + 1]);
+                if (!(op == 0x4EB9 || op == 0x4EF9 || (op & 0xF1FF) == 0x41F9)) continue;
+                uint32_t addr = ((uint32_t)bytes[k + 2] << 24) | (bytes[k + 3] << 16) | (bytes[k + 4] << 8) | bytes[k + 5];
+                if (addr < 0x70000 || addr >= 0x100000) continue;
+                const int as = tail_shift(addr);
+                if (as < 0) return false;
+                addr += (uint32_t)as;
+                bytes[k + 2] = (uint8_t)(addr >> 24); bytes[k + 3] = (uint8_t)(addr >> 16);
+                bytes[k + 4] = (uint8_t)(addr >> 8);  bytes[k + 5] = (uint8_t)addr;
+                k += 4;
+            }
+            return true;
+        };
+        std::vector<uint8_t> out = target;
+        size_t i = 0;
+        while (i < from_size) {   // changes inside the ROM
+            if (ov[i] < 0) { i++; continue; }
+            size_t j = i + 1, quiet = 0;       // a change, with the gaps of up to 8 bytes the patch leaves inside it
+            while (j < from_size && quiet < 8) {
+                if (ov[j] >= 0) quiet = 0; else quiet++;
+                j++;
+            }
+            j -= quiet;
+            // (from the word before the change: it may begin an instruction whose address the change is the end of)
+            const size_t s = i >= 2 ? (i & ~(size_t)1) - 2 : 0;
+            const int sh = tail_shift((uint32_t)i);
+            if (sh < 0 || tail_shift((uint32_t)s) != sh || tail_shift((uint32_t)(j - 1)) != sh) return false;
+            // Without REV 00's ROM to check against, only the last part of the sound code, which REV 01 has byte for byte
+            // where the patch works (the sound request), is changed.
+            if (!orig && (i < 0x7FD44 || sh != 0xC0000)) return false;
+            // the place in REV 01 must hold what REV 00 had there (the same code, or free space)
+            if (orig && memcmp(&target[s + sh], &(*orig)[s], j - s) != 0) return false;
+            std::vector<uint8_t> bytes(target.begin() + s + sh, target.begin() + j + sh);
+            for (size_t k = s; k < j; k++) if (ov[k] >= 0) bytes[k - s] = (uint8_t)ov[k];
+            if (!relocate(bytes)) return false;
+            memcpy(&out[s + sh], bytes.data(), bytes.size());
+            i = j;
+        }
+        size_t end = ov.size();            // what the patch adds after the end of the ROM (padding of $FF is not)
+        while (end > from_size && (ov[end - 1] < 0 || ov[end - 1] == 0xFF)) end--;
+        if (end > from_size) {
+            std::vector<uint8_t> bytes(end - from_size, 0xFF);
+            for (size_t k = from_size; k < end; k++) if (ov[k] >= 0) bytes[k - from_size] = (uint8_t)ov[k];
+            if (!relocate(bytes)) return false;
+            out.resize(end + 0xC0000, 0xFF);
+            memcpy(&out[from_size + 0xC0000], bytes.data(), bytes.size());
+        }
+        target = std::move(out);
+        return true;
+    }
     // REV 00 keeps the id its save states always had; REV 01's are separate (they hold that release's code state).
     std::string state_id(const MegaDrive& md) const override { return rev_of(md).sites ? "qs_r01" : "qs"; }
     const char* rom_names() const override { return "QUACKSHOT|ILOVEDONALDDUCK"; }
     uint32_t accent_color() const override { return 0xFFFFA23A; }
     int max_ext() const override { return 108; }  // up to 2.39:1 (536 px); beyond 80 the far columns are drawn from the map
 
-    static std::vector<RomPatch> patch_list(const Rev& R, const GameConfig& cfg) {
+    static std::vector<RomPatch> patch_list(const MegaDrive& md, const Rev& R, const GameConfig& cfg) {
         std::vector<RomPatch> p;
         auto add = [&](const std::vector<RomPatch>& v) { p.insert(p.end(), v.begin(), v.end()); };
         if (cfg.cheat("inf_lives")) add(inf_lives_patches(R));
@@ -572,26 +1084,40 @@ public:
         if (cfg.cheat("invincible")) add(invincible_patches(R));
         if (cfg.cheat("inf_ammo")) add(inf_ammo_patches(R));
         if (cfg.cheat("endless_quack")) add(endless_quack_patches(R));
+        if (cfg.cheat("level_start")) add(level_start_patches(R));
+        if (cfg.cheat("more_bubbles")) add(more_bubbles_patches(R));
+        add(plunger_color_patches(md, cfg));
         add(stream_patches(R));
-        if (cfg.ext > 0) add(wide_patches(R, cfg.ext));
+        if (cfg.ext > 0) add(wide_patches(R, cfg.ext, cfg.cheat("spawn_fix")));
         return p;
     }
 
     bool can_configure(const MegaDrive& md, const GameConfig& cfg) const override {
-        return patches_safe(md, patch_list(rev_of(md), cfg));
+        return patches_safe(md, patch_list(md, rev_of(md), cfg));
     }
 
     void configure(MegaDrive& md, const GameConfig& cfg) override {
         const Rev& R = rev_of(md);
-        apply_patches(md, patch_list(R, cfg));
+        apply_patches(md, patch_list(md, R, cfg));
+        // The game reads the colour table once per area ($5000), so a plunger already on screen gets its new colour here
+        // (the palette word it put in RAM, and a palette upload). Only in play and its pause menu: on other screens that
+        // palette entry holds something else.
+        const uint8_t mode_now = md.ram8(MODE);
+        if ((mode_now == M_GAMEPLAY || mode_now == M_PAUSE) && md.ram8(PLUNGER) < 3 && plunger_table(md)) {
+            md.set_ram16(PLUNGER_PAL, plunger_word(md, md.ram8(PLUNGER)));
+            md.set_ram8(PAL_DIRTY, 1);
+        }
         // From 16:9 or narrower to 2:1 / 21:9 mid-level (a setting, or a narrower save state loaded) the game has
         // created the spawn columns up to (X>>7)+3 only, while the far trigger goes on from +5: until the camera
         // reaches another 128-px cell, the original-column pass creates every entry of its column, not only the
         // deferred ones. module_state[0]: bit 31 + the camera cell at the switch; [1]: width last configured + 1.
+        // (bit 16: the far pass was on. States from builds without it hold the width alone, and the far pass then began
+        // above 16:9, so a 16:9 one counts as narrow.)
         const uint32_t prev = md.module_state[1];
-        if (cfg.ext <= 40) md.module_state[0] = 0;
-        else if (prev && prev - 1 <= 40) md.module_state[0] = 0x80000000u | (md.ram16(0xFF8524) >> 7);
-        md.module_state[1] = (uint32_t)cfg.ext + 1;
+        const bool prev_far = (prev & 0x10000) != 0 || (int)(prev & 0xFFFF) - 1 > 40;
+        if (cfg.ext < kFarFrom) md.module_state[0] = 0;
+        else if (prev && !prev_far) md.module_state[0] = 0x80000000u | (md.ram16(0xFF8524) >> 7);
+        md.module_state[1] = ((uint32_t)cfg.ext + 1) | (cfg.ext >= kFarFrom ? 0x10000u : 0u);
         if (md.module_state[0]) md.patch_rom16(R.spawn_all_flag(), 0x7C01);
         md.vdp.line_hook = cfg.ext > 0 ? line_hook : nullptr;
         md.vdp.sprite_x10 = cfg.ext > 64;   // screen x up to 427 needs VDP X beyond 511
@@ -614,7 +1140,7 @@ public:
             const int px0 = -(md.vdp.vram16((md.vdp.reg[13] & 0x3F) << 10) & 0x3FF) & 0x1FF;
             view_x = cam + (((px0 - cam) + 256) & 0x1FF) - 256;
         }
-        md.module_state[3] = (uint16_t)view_x;
+        if (!pause_screen(md)) md.module_state[3] = (uint16_t)view_x;   // (paused: the scroll table is the pause screen's)
         uint32_t& was = md.module_state[7];
         const bool free_move = cfg.cheat("free_move"), always_quack = cfg.cheat("always_quack"),
                    all_weapons = cfg.cheat("all_weapons");
@@ -663,13 +1189,14 @@ public:
     }
 
     void post_frame(MegaDrive& md, const GameConfig& cfg, FrameInfo& info) override {
+        from_start_frame(md, cfg);
         const int E = cfg.ext;
         const Rev& R = rev_of(md);
         // The narrow -> wide switch flag (configure) goes off once the camera has reached another 128-px cell -
         // judged by its previous-frame X ($852C): the spawner sees a crossing a frame after $8524 shows it.
         if (md.module_state[0] && (uint32_t)(md.ram16(0xFF852C) >> 7) != (md.module_state[0] & 0xFFFF)) {
             md.module_state[0] = 0;
-            if (E > 40) md.patch_rom16(R.spawn_all_flag(), 0x7C00);
+            if (E >= kFarFrom) md.patch_rom16(R.spawn_all_flag(), 0x7C00);
         }
         // The first crossing after a turn (wide_patches, TRIGGER): $852C -> $8524 is the step the spawner looks at
         // next frame. module_state[2]: direction of the last crossing (1 right, 0xFF left, 0 none yet).
@@ -679,14 +1206,75 @@ public:
                 const int dir = to > from ? 1 : -1, last = (int8_t)(uint8_t)md.module_state[2];
                 md.module_state[2] = (uint8_t)dir;
                 md.patch_rom16(R.left_flag(), dir < 0 && last > 0 ? LEFT_ON : LEFT_OFF);
-                if (E > 40) md.patch_rom16(R.spawn_all_flag(), (dir > 0 && last < 0) || md.module_state[0] ? 0x7C01 : 0x7C00);
+                if (E >= kFarFrom) md.patch_rom16(R.spawn_all_flag(), (dir > 0 && last < 0) || md.module_state[0] ? 0x7C01 : 0x7C00);
             }
         }
-        const bool level = wide_gameplay(md) || game_over(md);
+        // The "spawns behind the player" option: an enemy moved out of view at its creation catches up with where it would
+        // be at 4:3. It eases in gently: the extra speed is left/64 + 1/8 px a frame, at most 1.5 - it is still a little
+        // fast when it passes the place 4:3 made it at, and settles to its own pace over the next seconds (the birds
+        // have less time, see below). The object
+        // field $3E holds the pixels left (low 11 bits; bit 11: to the left) and the sixteenths of a pixel carried
+        // over (high 4); anything above the most the option moves is not ours.
+        // The sprite cycle keeps step with the ground covered. All objects animate through the same fields ($07 frame,
+        // $08 tick, counted up to the period at $09): the tick gets the frames' worth of the extra pixels at the
+        // enemy's own pace (birds 1.5 px a frame, the rest 1), so a faster walk is a faster stride, not a slide.
+        // The snake charmers $52 do not walk: they stand for a 60-frame cycle and step 11 px when it wraps. For them
+        // the cycle runs faster (up to 4 times, easing off to 2) and the distance is added to their steps only (up to
+        // 15 px a step, easing off to 3): longer, quicker steps, standing still in between as they do. Left alone they
+        // shuffle 11 px back and forth until Donald is near, so they do not make up the distance by themselves.
+        if (E > 0 && cfg.cheat("spawn_fix") && wide_gameplay(md)) {
+            const uint16_t most = (uint16_t)(160 + E + kBehindMargin);
+            for (uint32_t s = 0xFF9000; s < 0xFF9C00; s += 0x40) {
+                const uint16_t t = md.ram16(s), v = md.ram16(s + kCatchUpField), rem = v & 0x07FF, left = v & 0x0800;
+                if (!rem || rem > most || std::find(std::begin(kBehindTypes), std::end(kBehindTypes), t) == std::end(kBehindTypes))
+                    continue;
+                const uint32_t period = md.ram8(s + 0x09), tick = md.ram8(s + 0x08);
+                auto hurry = [&](unsigned ticks) {   // the sprite cycle, that many frames further (never past its wrap)
+                    if (period > 1 && ticks) md.set_ram8(s + 0x08, (uint8_t)std::min<unsigned>(tick + ticks, period - 1));
+                };
+                unsigned acc = v >> 12, n = 0;
+                if (t == 0x52) {
+                    // acc: 1 = this cycle's step has been lengthened
+                    const bool first = md.ram8(s + 0x07) == 0;
+                    if (!first) acc &= ~1u;
+                    const bool step_now = md.ram16(s + 0x02) != 0 && first && tick <= 1 && !(acc & 1);
+                    if (v & 0x8000) {   // caught up: kCharmerExtra more of its own steps clear of the terrain
+                        unsigned k = rem;
+                        if (step_now) { k--; acc |= 1; }
+                        md.set_ram16(s + kCatchUpField, k ? (uint16_t)(0x8000 | ((acc & 1) << 12) | k) : 0);
+                        continue;
+                    }
+                    if (step_now) {   // it has just stepped
+                        // (its own 11 px, to the right while it catches up - see CHARM_AT - count as well, so
+                        // that it is done where 4:3 made it, past the blocks, and goes its own way from there)
+                        const unsigned own = std::min<unsigned>(rem, 11);
+                        n = std::min<unsigned>(rem - own, std::max(3u, std::min(15u, rem / 5u)));
+                        md.set_ram16(s + 0x10, (uint16_t)(md.ram16(s + 0x10) + n));
+                        md.set_ram16(s + kCatchUpField, rem == n + own ? (uint16_t)(0x9000 | kCharmerExtra)
+                                                                       : (uint16_t)((1u << 12) | (rem - n - own)));
+                        continue;
+                    } else {
+                        hurry(std::max(1u, std::min(3u, rem / 24u)));
+                    }
+                } else {
+                    // The swoop-in birds (and the penguin) fly a fixed script and attack at its end only if Donald is
+                    // within 24 px: they have about 80 frames to be on their 4:3 track, so they keep the quicker curve
+                    // (left/40 + 1/4 px, at most 2).
+                    const bool bird = t == 0x0D || t == 0x7C, timed = bird || t == 0x4B;
+                    acc += timed ? std::min(32u, rem * 2u / 5u + 4u) : std::min(24u, rem / 4u + 2u);   // 1/16 px
+                    n = std::min<unsigned>(rem, acc >> 4);
+                    acc &= 15;
+                    if (t != 0xB0 || md.ram16(s + 0x02) == 2) hurry(bird ? (2 * n + 1) / 3 : n);   // (a statue: while it walks)
+                }
+                if (n) md.set_ram16(s + 0x10, (uint16_t)(md.ram16(s + 0x10) + (left ? -(int)n : (int)n)));
+                md.set_ram16(s + kCatchUpField, rem == n ? 0 : (uint16_t)((acc << 12) | left | (rem - n)));
+            }
+        }
+        const bool level = wide_gameplay(md) || game_over(md) || pause_screen(md);
         // A switch into play lands mid-frame (the HUD hook still sees the old mode on the status bar
         // lines), so the first frame stays 4:3. module_state[5]: level shown last frame.
         const bool settled = level && (md.module_state[5] & 1);
-        md.module_state[5] = level ? 1 : 0;
+        md.module_state[5] = (md.module_state[5] & ~1u) | (level ? 1 : 0);
         // Wide: gameplay, the frozen game-over screen and the cast scroll of the attract intro
         // (mode 1 while $FFFC04 = 0; the map and title picture after it are 320 px, beside leftovers).
         // $FFFC04 changes 2 frames before the cave picture is cut, so the scroll keeps its width for those.
@@ -697,11 +1285,13 @@ public:
             else if (md.module_state[4] < 255) md.module_state[4]++;
             cast = md.module_state[4] <= 2;
         }
-        info.gameplay = settled || cast;
+        info.gameplay = settled || cast || (E > 0 && (map_screen(md) || title_screen(md) || menu_screen(md)));
         if (!settled || E == 0) return;
         int x = (int16_t)(uint16_t)md.module_state[3], xmin = md.ram16(0xFF8504), xmax = md.ram16(0xFF8500);
-        info.mask_left = std::clamp(E - (x - xmin), 0, E);
-        info.mask_right = std::clamp(x + E - xmax, 0, E);
+        if (!pause_screen(md)) {   // (the pause screen fills the view whatever the camera's place in the level)
+            info.mask_left = std::clamp(E - (x - xmin), 0, E);
+            info.mask_right = std::clamp(x + E - xmax, 0, E);
+        }
         if (md.vdp.reg[18] == 0x98) {
             info.mask_lines = 192;
             info.pillar_below = !cfg.hud_anchor;
@@ -878,6 +1468,141 @@ public:
         }
     }
 
+    // "Cycle weapons with button press": the weapon ($8F66: 0 plunger, 1 popcorn, 2 bubble gum - the last once Gyro
+    // has handed it over, $EEE7) changes as the pause menu changes it, without the pause; bit 0 of $EE5B has the
+    // status bar draw the new weapon and its count. Only in play (not in the demo, the map or a cutscene).
+    //
+    // "Play levels from beginning": on the world map, while choosing ($A344 = 1), the same buttons arm / disarm a
+    // start from the level's first entry (module_state[5] bit 1); the name label's border and the markers turn purple
+    // while armed (palette 0, colours 2-4). From the departure until play begins the entry is held at 0, the
+    // location's very first area (the map writes the return entry when it departs) and FROM_START_FLAG keeps mode 4 from swapping
+    // the return entry in. The location stays cleared, its plane pickup flag where it was.
+    static constexpr uint32_t kFromStart = 2;
+    static constexpr uint16_t kLabelGreen[3] = {0x134, 0x0A2, 0x059}, kLabelPurple[3] = {0x19D, 0x14B, 0x0C2};   // (VDP::cram, packed)
+    static void label_colours(MegaDrive& md, bool purple) {
+        const uint16_t* from = purple ? kLabelGreen : kLabelPurple, * to = purple ? kLabelPurple : kLabelGreen;
+        for (int i = 0; i < 3; i++)
+            if (md.vdp.cram[2 + i] == from[i]) md.vdp.cram[2 + i] = to[i];   // (not during a fade)
+    }
+    static void from_start_frame(MegaDrive& md, const GameConfig& cfg) {
+        if (!cfg.cheat("level_start")) { md.module_state[5] &= ~kFromStart; return; }
+        uint32_t& st = md.module_state[5];
+        const uint32_t flag_word = rev_of(md).code + FROM_START_FLAG;
+        const uint16_t mode = md.ram16(MODE_W) & 0x7FFF, loc = md.ram16(0xFF8F34);
+        const bool loading = (mode == M_MAP && md.ram16(0xFFA344) == 2) || mode == M_MAP_TO_LEVEL || mode == 0x04;
+        bool on = false;
+        if (st & kFromStart) {
+            if (mode == M_MAP && !loading) {
+                label_colours(md, true);
+            } else if (loading && loc >= 1 && loc <= 7) {
+                md.set_ram16(0xFF8F74, 0);   // (entry 0: Mexico's town, the Viking ship's deck 1 - the level select's first)
+                on = true;
+            } else {   // play has begun, or the game went elsewhere
+                if (mode == M_MAP) label_colours(md, false);
+                st &= ~kFromStart;
+            }
+        }
+        if (md.rom16(flag_word) != (on ? FROM_START_ON : FROM_START_OFF)) md.patch_rom16(flag_word, on ? FROM_START_ON : FROM_START_OFF);
+    }
+
+    void hotkey(MegaDrive& md, const GameConfig& cfg, int id) override {
+        if (id < 0 || id > 1) return;
+        if ((md.ram16(MODE_W) & 0x7FFF) == M_MAP && md.ram16(0xFFA344) == 1 && cfg.cheat("level_start")) {
+            md.module_state[5] ^= kFromStart;
+            label_colours(md, md.module_state[5] & kFromStart);
+            return;
+        }
+        if (!cfg.cheat("weapon_cycle") || (md.ram16(MODE_W) & 0x7FFF) != M_GAMEPLAY || md.ram16(0xFFFF1A) != 1) return;
+        const int count = md.ram8(0xFF0000 | BUBBLEGUM) ? 3 : 2, now = md.ram16(0xFF8F66);
+        const int next = now >= count ? 0 : (now + (id == 0 ? 1 : count - 1)) % count;
+        md.set_ram16(0xFF8F66, (uint16_t)next);
+        md.set_ram8(AMMO_DIRTY, md.ram8(AMMO_DIRTY) | 1);
+        // The popcorn and the bubble gum share their shots' tiles: the pause menu loads the chosen one's art when it
+        // changes the weapon ($D34: trap #1 with art $21 popcorn / $22 bubble gum; the plunger has its own), which
+        // the change here does too.
+        if (next) load_art(md, next == 1 ? 0x21 : 0x22);
+    }
+
+    // trap #1 ($17B2 / $17FE): art n = a VRAM write command and a Nemesis-packed source, 8 bytes at table + n*8 - 8
+    // (the table: lea d16(pc) at the handler + $E). The game unpacks it straight into VRAM ($222C); so does this.
+    static void load_art(MegaDrive& md, int n) {
+        const uint32_t v = ((uint32_t)md.rom16(0x84) << 16) | md.rom16(0x86);
+        if (md.rom16(v + 0x0E) != 0x41FA) return;
+        const uint32_t table = v + 0x10 + (uint32_t)(int16_t)md.rom16(v + 0x10), e = table + n * 8 - 8;
+        const uint32_t cmd = ((uint32_t)md.rom16(e) << 16) | md.rom16(e + 2);
+        const uint32_t src = ((uint32_t)md.rom16(e + 4) << 16) | md.rom16(e + 6);
+        if ((cmd & 0xC00000F0) != 0x40000000) return;   // (a VRAM write)
+        const uint16_t addr = (uint16_t)(((cmd >> 16) & 0x3FFF) | ((cmd & 3) << 14));
+        std::vector<uint8_t> out;
+        if (!nemesis(md.rom, src, out)) return;
+        md.vdp.wait_render();
+        for (size_t i = 0; i < out.size(); i++) md.vdp.vram[(uint16_t)(addr + i)] = out[i];   // (VRAM is kept big-endian)
+    }
+
+    // Nemesis decompression (the format the game's $222C reads): a header word (bit 15: rows XORed with the one
+    // before, the rest: tiles), a code table (nybble / run length / code length entries, ended by $FF), then a
+    // bit stream of codes, 8 nybbles a 32-bit row; the code 111111 is followed by a 3-bit run and a 4-bit nybble.
+    static bool nemesis(const std::vector<uint8_t>& rom, uint32_t at, std::vector<uint8_t>& out) {
+        auto byte = [&](uint32_t a) -> int { return a < rom.size() ? rom[a] : -1; };
+        if (at + 2 >= rom.size()) return false;
+        const uint16_t head = (uint16_t)((rom[at] << 8) | rom[at + 1]);
+        const bool xr = head & 0x8000;
+        const uint32_t rows = (uint32_t)(head & 0x7FFF) * 8;
+        if (!rows || rows > 0x800 * 8) return false;
+        at += 2;
+        struct Code { uint8_t nyb, run; };
+        Code table[9][256] = {};
+        bool used[9][256] = {};
+        int b = byte(at++), nyb = 0;
+        while (b != 0xFF) {
+            if (b < 0) return false;
+            if (b & 0x80) { nyb = b & 0x0F; b = byte(at++); continue; }
+            const int run = ((b >> 4) & 7) + 1, len = b & 0x0F, code = byte(at++);
+            if (code < 0 || len < 1 || len > 8) return false;
+            table[len][code] = {(uint8_t)nyb, (uint8_t)run};
+            used[len][code] = true;
+            b = byte(at++);
+        }
+        uint32_t bits = 0; int have = 0;
+        auto bit = [&]() -> int {
+            if (!have) { const int c = byte(at++); if (c < 0) return -1; bits = (uint32_t)c; have = 8; }
+            have--;
+            return (bits >> have) & 1;
+        };
+        uint32_t row = 0, prev = 0, done = 0; int nybbles = 0;
+        out.clear();
+        auto put = [&](int v, int count) {
+            while (count-- > 0 && done < rows) {
+                row = (row << 4) | (uint32_t)v;
+                if (++nybbles == 8) {
+                    const uint32_t w = xr ? row ^ prev : row;
+                    prev = w;
+                    out.push_back((uint8_t)(w >> 24)); out.push_back((uint8_t)(w >> 16));
+                    out.push_back((uint8_t)(w >> 8)); out.push_back((uint8_t)w);
+                    row = 0; nybbles = 0; done++;
+                }
+            }
+        };
+        while (done < rows) {
+            int code = 0, len = 0;
+            for (;;) {
+                const int c = bit();
+                if (c < 0) return false;
+                code = (code << 1) | c; len++;
+                if (len == 6 && code == 0x3F) {
+                    int run = 0, v = 0;
+                    for (int i = 0; i < 3; i++) { const int k = bit(); if (k < 0) return false; run = (run << 1) | k; }
+                    for (int i = 0; i < 4; i++) { const int k = bit(); if (k < 0) return false; v = (v << 1) | k; }
+                    put(v, run + 1);
+                    break;
+                }
+                if (used[len][code]) { put(table[len][code].nyb, table[len][code].run); break; }
+                if (len == 8) return false;
+            }
+        }
+        return true;
+    }
+
     std::vector<CheatEntry> cheats() const override {
         return {
             {"invincible", "Invincibility", "Enemies can't hurt Donald. Falling off the screen still costs a life."},
@@ -933,7 +1658,7 @@ public:
         }
         for (uint32_t i = 0; i < 0x20; i++) md.set_ram8(0xFFFCA0 + i, md.ram8(0xFFEEE0 + i));
         md.set_ram8(PLUNGER, (uint8_t)p.plunger);
-        md.set_ram16(PLUNGER_PAL, PLUNGER_COLORS[p.plunger]);
+        md.set_ram16(PLUNGER_PAL, PLUNGER_SHADES[plunger_choice(cfg, p.plunger)]);
         md.set_ram8(PAL_DIRTY, 1);
         md.set_ram16(GUM, (uint16_t)p.gum);
         if (p.gum) md.set_ram8(AMMO_DIRTY, md.ram8(AMMO_DIRTY) | 1);
@@ -1016,7 +1741,7 @@ public:
 private:
     static void set_plunger(MegaDrive& md, int type) {
         md.set_ram8(PLUNGER, (uint8_t)type);
-        md.set_ram16(PLUNGER_PAL, PLUNGER_COLORS[type]);
+        md.set_ram16(PLUNGER_PAL, plunger_word(md, type));
         md.set_ram8(PAL_DIRTY, 1);
     }
 

@@ -90,6 +90,21 @@ const std::vector<RomPatch> kInfHealth = {{0x00F098, {0x9F28, 0x0038}, {0x4A28, 
                                           {0x00F0D0, {0x9F28, 0x0038}, {0x4A28, 0x0038}}};
 const std::vector<RomPatch> kInfLives = {{0x00F0EE, {0x5378, 0xFD52}, {0x4A78, 0xFD52}}};
 
+// Character swap: the player's art (animation table, tile table, VRAM base) is chosen from the character
+// byte $33 flipped, while $33 itself - which the game logic reads - stays as it is. The voice clips swap too. Donald's animation
+// table has no entries for Mickey's flying states ($32, $33, $36-$39): they fall back to state 0.
+constexpr uint32_t T_SWAP = 0x0FFD00, T_FALLBACK = 0x0FFD20;
+const std::vector<RomPatch> kSwapChars = {
+    {0x00BD82, {0x4A28, 0x0033, 0x6600, 0x0026}, {0x4EF9, 0x000F, (uint16_t)T_SWAP, 0x4E71}},
+    {T_SWAP, std::vector<uint16_t>(12, 0xFFFF),
+     {0x1F28, 0x0033, 0x0A17, 0x0001, 0x4A1F, 0x6606, 0x4EF9, 0x0000, 0xBD8A, 0x4EF9, 0x0000, 0xBDAE}},
+    {0x00CA5A, {0x3031, 0x0000, 0xD3C0}, {0x4EB9, 0x000F, (uint16_t)T_FALLBACK}},
+    // voices (Alakazam / ouch / voice clips): the Mickey-or-Donald pick at $BDEA and $7B28 is inverted
+    {0x00BDEE, {0x6602}, {0x6702}},
+    {0x007B2C, {0x6602}, {0x6702}},
+    {T_FALLBACK, std::vector<uint16_t>(7, 0xFFFF), {0x3031, 0x0000, 0x4A40, 0x6602, 0x3011, 0xD3C0, 0x4E75}},
+};
+
 // ---- widescreen (docs/re_woi_wide.md) --------------------------------------------------------------
 // Plane streaming already covers [camX-96, camX+401). The patches widen the sprite clip, object
 // despawn/spawn windows, map animations and the 2-player / auto-scroll "keep on screen" rules
@@ -348,6 +363,7 @@ public:
         if (cfg.cheat("invincible")) add(kInvincible);
         if (cfg.cheat("inf_health")) add(kInfHealth);
         if (cfg.cheat("inf_lives")) add(kInfLives);
+        if (cfg.cheat("swap_chars")) add(kSwapChars);
         if (cfg.ext > 0) add(wide_patches(cfg.ext));
         return p;
     }
