@@ -128,8 +128,11 @@ API void* mdt_create(const char* rom_path) {
 }
 API void mdt_destroy(void* h) { delete (Tool*)h; }
 API void mdt_power_on(void* h) { ((Tool*)h)->md.power_on(); }
+API void mdt_set_overseas(void* h, int on) { ((Tool*)h)->md.overseas = on != 0; }   // region: takes effect at mdt_power_on
 API void mdt_soft_reset(void* h) { ((Tool*)h)->md.soft_reset(); }
 API void mdt_set_buttons(void* h, int port, int buttons) { ((Tool*)h)->buttons[port & 1] = (uint16_t)buttons; }
+API void mdt_module_hotkey(void* h, int id) { Tool* t = (Tool*)h; if (t->module) t->module->hotkey(t->md, t->cfg, id); }
+API void mdt_set_video_thread(void* h, int on) { ((Tool*)h)->md.set_video_thread(on != 0); }
 API void mdt_set_cpu_percent(void* h, int percent) { ((Tool*)h)->md.cpu_percent = percent < 25 ? 25 : percent > 800 ? 800 : percent; }
 API void mdt_run_frames(void* h, int n) {
     Tool* t = (Tool*)h;
