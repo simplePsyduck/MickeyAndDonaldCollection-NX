@@ -70,6 +70,9 @@ void App::open_pause_menu() {
         it.value_text = locked;
         p.items.push_back(it);
     }
+    if (std::string(m->id()) == "qs" || std::string(m->id()) == "woi")
+        p.items.push_back(MenuItem::action("Enhancements", [this]() { menu_.push(enhancements_page()); },
+                                           std::string(m->id()) == "qs" ? "Optional changes to how QuackShot plays." : "Optional changes to how World of Illusion plays."));
     p.items.push_back(MenuItem::action("Achievements", [this]() { menu_.push(achievements_page(current_)); },
                                        "This game's achievements and the collection's."));
     if (!m->sounds().empty()) {
@@ -80,7 +83,7 @@ void App::open_pause_menu() {
     }
     if (m->max_players() > 1)
         p.items.push_back(MenuItem::action("Player 2 Controls", [this]() { menu_.push(controls_page(1)); },
-                                           "Set up the second player's keyboard keys or gamepad."));
+                                           "Set up the second player's gamepad."));
     p.items.push_back(MenuItem::action("Options", [this]() { open_options_menu(false); }));
     p.items.push_back(MenuItem::action("Credits", [this]() { open_credits(false); }));
     p.items.push_back(MenuItem::header("System"));
@@ -93,9 +96,9 @@ void App::open_pause_menu() {
     p.items.push_back(MenuItem::action("Return to Launcher", [this]() {
         menu_.confirm("Return to the launcher?", [this]() { back_to_launcher(); }, "Unsaved progress will be lost.");
     }));
-//    p.items.push_back(MenuItem::action("Quit to Desktop", [this]() {
-//        menu_.confirm("Quit to desktop?", [this]() { running_ = false; }, "Unsaved progress will be lost.");
-//	}));
+  //  p.items.push_back(MenuItem::action("Quit to Desktop", [this]() {
+ //       menu_.confirm("Quit to desktop?", [this]() { running_ = false; }, "Unsaved progress will be lost.");
+   // }));
     menu_.open(std::move(p));
 }
 
@@ -108,22 +111,22 @@ void App::open_options_menu(bool from_launcher) {
     // Player 2 only matters for World of Illusion: offer it from the launcher and inside 2-player games.
     bool two_player = from_launcher || (session_ && session_->module()->max_players() > 1);
     p.items.push_back(MenuItem::action(two_player ? "Controls - Player 1" : "Controls", [this]() { menu_.push(controls_page(0)); },
-                                       "Keyboard and gamepad bindings."));
+                                       "Gamepad bindings."));
     if (two_player)
         p.items.push_back(MenuItem::action(from_launcher ? "Controls - Player 2 (World of Illusion)" : "Controls - Player 2",
                                            [this]() { menu_.push(controls_page(1)); },
-                                           "Second player's keys and gamepad (World of Illusion is the only 2-player game)."));
-    p.items.push_back(MenuItem::header("Speed"));
+                                           "Second player's gamepad (World of Illusion is the only 2-player game)."));
+    p.items.push_back(MenuItem::header("Emulation"));
     // (beside each switch: what to hold, or why it is off)
     MenuItem ff = MenuItem::toggle("Fast Forward", [this]() { return settings_.fast_forward && !settings_.achievements; },
                                    [this](bool v) { settings_.fast_forward = v; },
-                                   "Hold the fast forward key or button for 4x speed (they can be changed under Controls).");
+                                   "Hold the fast forward button for 4x speed (they can be changed under Controls).");
     ff.enabled = [this]() { return !settings_.achievements; };
     ff.value_text = [this]() { return settings_.achievements ? std::string("Off (achievements on)") : hotkey_text(HK_FAST_FORWARD); };
     p.items.push_back(ff);
     MenuItem rw = MenuItem::toggle("Rewind", [this]() { return settings_.rewind && !settings_.achievements; },
                                    [this](bool v) { settings_.rewind = v; if (!v) rewind_.clear(); },
-                                   "Hold the rewind key or button to step back up to a minute (they can be changed under Controls).");
+                                   "Hold the rewind button to step back up to a minute (they can be changed under Controls).");
     rw.enabled = [this]() { return !settings_.achievements; };
     rw.value_text = [this]() { return settings_.achievements ? std::string("Off (achievements on)") : hotkey_text(HK_REWIND); };
     p.items.push_back(rw);
@@ -138,6 +141,18 @@ void App::open_options_menu(bool from_launcher) {
                                            },
                                            "Speeds up the emulated 68000 (100% is the real console) to remove slowdown. "
                                            "Games run at the same speed; very high settings need a fast device and may upset timing-sensitive code."));
+    }
+    {   // The console the games believe they run on. They read it once, when they start.
+        MenuItem rg = MenuItem::choice("Region", {"North America", "Japan"}, [this]() { return settings_.region == 1 ? 1 : 0; },
+                                       [this](int v) {
+                                           settings_.region = v == 1 ? 1 : 0;
+                                           apply_settings();
+                                           save_settings();
+                                           if (session_ && session_->region_pending()) menu_.toast("The region changes at the next Reset Game", 3.0f);
+                                       },
+                                       "The emulated console's region: games may show another language or title in Japan. "
+                                       "Takes effect when a game starts (or Reset Game).");
+        p.items.push_back(rg);
     }
     // (right under what it switches off)
     p.items.push_back(MenuItem::header("Achievements"));
@@ -168,7 +183,7 @@ void App::open_credits(bool from_launcher) {
     p.title = "Credits";
     p.subtitle = std::string("Mickey & Donald Collection  \xE2\x80\xA2  v") + kAppVersion;
     p.wide = true;
-    p.items.push_back(MenuItem::header("PC & Android port by Darhkfox:"));
+    p.items.push_back(MenuItem::header("Original PC & Android Port by Darhkfox"));
     auto link = [this](const char* label, const char* shown, const char* url) {
         MenuItem it = MenuItem::action(label, [this, url]() {
             if (autotest_) return;   // scripted test runs never open a browser
@@ -180,12 +195,11 @@ void App::open_credits(bool from_launcher) {
     p.items.push_back(link("YouTube", "https://www.youtube.com/adhgaming", "https://www.youtube.com/adhgaming"));
     p.items.push_back(link("Reddit", "u/Darhkwing", "https://www.reddit.com/user/Darhkwing"));
     p.items.push_back(link("GitHub", "https://github.com/Darhkfox", "https://github.com/Darhkfox"));
-	p.items.push_back(link("X", "https://x.com/ADH_Gaming", "https://x.com/ADH_Gaming"));
-	p.items.push_back(link("Patreon", "https://patreon.com/c/TeamRedTail", "https://patreon.com/c/TeamRedTail"));
-	p.items.push_back(MenuItem::header("Nintendo Switch port by simplePsyduck:"));
-	p.items.push_back(link("Twitch", "https://simplePsyduck.com/twitch", "https://simplePsyduck.com/twitch"));
-	p.items.push_back(link("Discord", "https://simplePsyduck.com/discord", "https://simplePsyduck.com/discord"));
+	p.items.push_back(MenuItem::header("Nintendo Switch Port by simplePsyduck"));
 	p.items.push_back(link("GitHub", "https://github.com/simplePsyduck", "https://github.com/simplePsyduck"));
+	p.items.push_back(link("Twitch", "https://twitch.tv/simplePsyduck", "https://twitch.tv/simplePsyduck"));
+	p.items.push_back(link("Discord", "https://simplePsyduck.com/discord", "https://simplePsyduck.com/discord"));
+
     if (from_launcher) menu_.open(std::move(p));
     else menu_.push(std::move(p));   // from the pause menu: Back returns to it
 }
@@ -232,11 +246,16 @@ MenuPage App::video_page() {
                                     "In widescreen, moves the status bar items out to the screen edges.");
     hud.enabled = [this]() { return settings_.widescreen != WideMode::Off; };
     p.items.push_back(hud);
+    p.items.push_back(MenuItem::toggle("Video thread", [this]() { return settings_.video_thread; },
+                                       [this, changed](bool v) { settings_.video_thread = v; changed(); },
+                                       "Draws the picture on a second CPU core while the first one runs the game's processors and sound. "
+                                       "Same picture and gameplay; more headroom for CPU Overclock, fast forward and the wide views. "
+                                       "Off by default."));
     p.items.push_back(MenuItem::choice("Pixel Aspect", {"Square pixels", "CRT (4:3 pixels)", "Stretch to window"},
                                        [this]() { return (int)settings_.aspect; }, [this](int v) { settings_.aspect = (AspectMode)v; }));
     p.items.push_back(MenuItem::toggle("Integer Scaling", [this]() { return settings_.integer_scale; },
                                        [this](bool v) { settings_.integer_scale = v; }, "Scale only by whole numbers for perfectly even pixels."));
-    p.items.push_back(MenuItem::choice("Filter", {"Nearest (sharp)", "Sharp bilinear", "Bilinear (smooth)", "Scanlines", "CRT"},
+    p.items.push_back(MenuItem::choice("Filter", {"Nearest (sharp)", "Sharp bilinear", "Bilinear (smooth)", "Scanlines", "CRT", "Scale2x", "Scale4x", "xBR 2x", "xBR 4x"},
                                        [this]() { return settings_.filter; }, [this](int v) { settings_.filter = v; }));
 #ifdef _WIN32
     p.items.push_back(MenuItem::toggle("VSync", [this]() { return settings_.vsync; }, [this, changed](bool v) { settings_.vsync = v; changed(); }));
@@ -348,34 +367,49 @@ MenuPage App::controls_page(int player) {
     }
     p.items.push_back(MenuItem::choice("Device", pads, [this, player]() { return settings_.pad_index[player] + 1; },
                                        [this, player](int v) { settings_.pad_index[player] = v - 1; },
-                                       "Auto takes the first connected pad the other player isn't using. Slots 1-4 are Xbox-style pads, 5-8 other controllers."));
+                                       "Auto takes the first connected pad the other player isn't using. Slots 1-8 are hardcoded to controllers 1-8"));
     for (int a = 0; a < ACT_COUNT; a++) {
         MenuItem it;
         it.kind = MenuItem::Bind;
         it.bind_pad = true;
         it.label = std::string(action_name(a));
+        // (an action's buttons are a mask: any of them presses it)
         it.value_text = [this, player, a]() {
-            uint32_t b = settings_.pad_buttons[player][a];
-            return b ? Input::pad_button_name(b) : std::string("-");
+            const uint32_t m = settings_.pad_buttons[player][a];
+            std::string s;
+            for (uint32_t bit = 1; bit; bit <<= 1)
+                if (m & bit) s += (s.empty() ? "" : ", ") + Input::pad_button_name(bit);
+            return s.empty() ? std::string("-") : s;
         };
         it.on_bind = [this, player, a](int, uint32_t b) {
-            for (int c = 0; c < ACT_COUNT; c++)   // swap with the action (or hotkey) that had this button
-                if (settings_.pad_buttons[player][c] == b && c != a) settings_.pad_buttons[player][c] = settings_.pad_buttons[player][a];
+            const uint32_t old = settings_.pad_buttons[player][a], old_one = old & (~old + 1);
+            for (int c = 0; c < ACT_COUNT; c++) {   // swap with the action (or hotkey) that had only this button
+                uint32_t& m = settings_.pad_buttons[player][c];
+                if (c == a) continue;
+                if (m == b) m = old; else m &= ~b;
+            }
             for (int h = 0; h < HK_COUNT; h++)
-                if (settings_.hotkey_pads[h] == b) settings_.hotkey_pads[h] = settings_.pad_buttons[player][a];
+                if (settings_.hotkey_pads[h] == b) settings_.hotkey_pads[h] = old_one;
             settings_.pad_buttons[player][a] = b;
         };
-        it.hint = "Press Enter / (A), then the new pad button. Esc cancels.";
+        it.on_bind_add = [this, player, a](uint32_t b) {   // (X): one more button for the same action
+            for (int c = 0; c < ACT_COUNT; c++)
+                if (c != a) settings_.pad_buttons[player][c] &= ~b;
+            for (int h = 0; h < HK_COUNT; h++)
+                if (settings_.hotkey_pads[h] == b) settings_.hotkey_pads[h] = 0;
+            settings_.pad_buttons[player][a] |= b;
+        };
+        it.hint = "Press (A), then the new pad button. Press (X) instead to add another button for the same action.";
         p.items.push_back(it);
     }
     // (fast forward and rewind are off while achievements are on)
     auto speed = [](int h) { return h == HK_FAST_FORWARD || h == HK_REWIND; };
     if (player == 0)
-        for (int h = 0; h < HK_COUNT; h++) {
+        for (int h = 0; h < HK_WEAPON_NEXT; h++) {   // (the weapon hotkeys: QuackShot's Enhancements page)
             MenuItem it;
             it.kind = MenuItem::Bind;
             it.bind_pad = true;
-            static const char* kHotkeyNames[HK_COUNT] = {"Fast Forward (hold)", "Rewind (hold)", "Menu", "Quick Save", "Quick Load",
+            static const char* kHotkeyNames[HK_WEAPON_NEXT] = {"Fast Forward (hold)", "Rewind (hold)", "Menu", "Quick Save", "Quick Load",
                                                          "Screenshot"};
             it.label = kHotkeyNames[h];
             it.value_text = [this, h, speed]() {
@@ -385,7 +419,7 @@ MenuPage App::controls_page(int player) {
             };
             if (speed(h)) it.enabled = [this]() { return !settings_.achievements; };
             it.on_bind = [this, h](int, uint32_t b) { bind_hotkey_pad(h, b); };
-            it.hint = "Press Enter / (A), then the new pad button. Esc cancels.";
+            it.hint = "Press  (A), then the new pad button.";
             p.items.push_back(it);
         }
     if (player == 0)
@@ -424,6 +458,76 @@ MenuPage App::cheats_page() {
         settings_.cheats[gid].clear();
         apply_settings();
     }));
+    p.on_back = [this]() { save_settings(); };
+    return p;
+}
+
+// QuackShot's optional changes to the game (pause menu, under Cheats).
+MenuPage App::enhancements_page() {
+    MenuPage p;
+    p.title = "Enhancements";
+    p.subtitle = session_->module()->title();
+    p.wide = true;
+    if (std::string(session_->module()->id()) == "woi") {
+        p.items.push_back(MenuItem::toggle("Remove slowdown", [this]() { return settings_.woi_slowdown; },
+                                           [this](bool v) { settings_.woi_slowdown = v; apply_settings(); },
+                                           "Runs the game's CPU at 200%, whatever CPU Overclock says, so busy scenes no longer slow down."));
+        p.items.push_back(MenuItem::toggle("Swap Mickey & Donald's levels", [this]() { return settings_.woi_swap; },
+                                           [this](bool v) { settings_.woi_swap = v; apply_settings(); },
+                                           "Mickey looks and sounds like Donald and Donald like Mickey, so each can play the other's story "
+                                           "levels. Takes effect after Reset Game."));
+        p.on_back = [this]() { save_settings(); };
+        return p;
+    }
+    MenuItem sp = MenuItem::toggle("Adjust spawns behind player", [this]() { return settings_.fix_behind_spawns; },
+                                   [this](bool v) { settings_.fix_behind_spawns = v; apply_settings(); },
+                                   "Alter spawn behavior behind player to reduce \"pop-in\"");
+    sp.enabled = [this]() { return settings_.widescreen != WideMode::Off; };
+    sp.value_text = [this]() { return std::string(settings_.widescreen != WideMode::Off ? "" : "Off (widescreen off)"); };
+    p.items.push_back(sp);
+    p.items.push_back(MenuItem::toggle("Fix slowdown", [this]() { return settings_.fix_slowdown; },
+                                       [this](bool v) { settings_.fix_slowdown = v; apply_settings(); },
+                                       "Runs the game's CPU at 400% (the top CPU Overclock step), so busy scenes no longer slow down."));
+    p.items.push_back(MenuItem::toggle("Shoot more bubbles", [this]() { return settings_.more_bubbles; },
+                                       [this](bool v) { settings_.more_bubbles = v; apply_settings(); },
+                                       "The bubble gum can fire again while its bubbles are still out: up to 6 on screen at a time "
+                                       "instead of 1."));
+    p.items.push_back(MenuItem::toggle("Cycle weapons with button press", [this]() { return settings_.weapon_cycle; },
+                                       [this](bool v) { settings_.weapon_cycle = v; apply_settings(); },
+                                       "Change between the plunger, popcorn and bubble gum while playing, without pausing, with the "
+                                       "two buttons below."));
+    static const char* kNames[2] = {"Swap weapon right", "Swap weapon left"};
+    for (int i = 0; i < 2; i++) {
+        const int h = HK_WEAPON_NEXT + i;
+        MenuItem it;
+        it.kind = MenuItem::Bind;
+        it.bind_pad = true;
+        it.label = kNames[i];
+        it.value_text = [this, h]() {
+            const uint32_t b = settings_.hotkey_pads[h];
+            return b ? Input::pad_button_name(b) : std::string("-");
+        };
+        it.enabled = [this]() { return settings_.weapon_cycle || settings_.level_start; };
+        it.on_bind = [this, h](int, uint32_t b) { bind_hotkey_pad(h, b); };
+        it.hint = i == 0 ? "Next weapon: plunger, popcorn, bubble gum. Press  (A), then the pad button."
+                         : "Previous weapon: bubble gum, popcorn, plunger. Press  (A), then the pad button.";
+        p.items.push_back(it);
+    }
+    p.items.push_back(MenuItem::toggle("Play levels from beginning", [this]() { return settings_.level_start; },
+                                       [this](bool v) { settings_.level_start = v; apply_settings(); },
+                                       "On the world map, the swap weapon buttons turn the level name's border purple: a level "
+                                       "chosen while it is purple starts at its beginning instead of at its flag."));
+    static const char* kPlungerLabels[3] = {"Yellow plunger color", "Red plunger color", "Green plunger color"};
+    static const char* kPlungerHints[3] = {
+        "The color of the plain plunger Donald starts with.",
+        "The color of the red plunger (climbs walls), from Goofy in Mexico.",
+        "The color of the green plunger (grabs flying things), from the Viking ship."};
+    std::vector<std::string> plunger_colors;
+    for (int c = 0; c < kPlungerColorCount; c++) plunger_colors.push_back(plunger_color_name(c));
+    for (int t = 0; t < 3; t++)
+        p.items.push_back(MenuItem::choice(kPlungerLabels[t], plunger_colors, [this, t]() { return settings_.plunger_color[t]; },
+                                           [this, t](int v) { settings_.plunger_color[t] = v; apply_settings(); },
+                                           kPlungerHints[t]));
     p.on_back = [this]() { save_settings(); };
     return p;
 }
@@ -467,5 +571,6 @@ MenuPage App::level_page() {
 void App::open_jukebox(int game, bool sfx) {
     if (game < 0 || game >= kGameCount || !games_[game].rom.found) return;
     if (!sfx) scan_soundtracks();   // (the Music Player offers the game's MD+ soundtracks too)
-    jukebox_.open(games_[game].module.get(), games_[game].rom.data, settings_, sfx, soundtracks_);
+    jukebox_.open(games_[game].module.get(), games_[game].rom.data, settings_, sfx, soundtracks_, games_[game].variant,
+                  variant_roms(game));
 }

@@ -10,6 +10,7 @@
 struct UiInput {
     bool up = false, down = false, left = false, right = false;   // auto-repeating
     bool confirm = false, back = false, menu = false;
+    bool alt = false;              // pad X: on a pad binding, add a button instead of replacing
     bool page_left = false, page_right = false;
     int  key_pressed = 0;          // raw VK pressed this frame (for rebinding)
     uint32_t pad_pressed = 0;      // normalised pad buttons pressed this frame
@@ -32,6 +33,7 @@ struct MenuItem {
     std::function<std::string(int)> format;            // Slider value text
     std::function<std::string()> value_text;           // Bind / Action / Info value on the right
     std::function<void(int vk, uint32_t pad)> on_bind; // Bind: called with the captured input
+    std::function<void(uint32_t pad)> on_bind_add;     // Bind (pad): called instead when the capture was started with X
     bool bind_pad = false;                             // Bind expects a pad button (else a key)
     std::function<bool()> enabled;
     bool selectable() const { return kind != Header && kind != Info; }
@@ -89,6 +91,7 @@ public:
 private:
     std::vector<MenuPage> stack_;
     bool capture_ = false;
+    bool capture_add_ = false;
     float capture_block_ = 0;
     struct Toast { std::string text; float t; float life; };
     std::vector<Toast> toasts_;

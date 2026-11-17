@@ -8,33 +8,18 @@
 namespace {
 // The CD track an MD+ pack plays for each of the game's tunes, read from its patched ROM: on a scratch machine the
 // game's own music request runs for every music ID (GameModule::music_request), and the patch's commands to the CD
-// overlay say which track it plays and whether it loops. Worked out once per pack.
-const std::map<int, std::pair<int, bool>>& soundtrack_tracks(GameModule* module, const std::vector<uint8_t>& rom,
+// overlay say which track it plays and whether it loops. Worked out once per pack and release.
+const std::map<int, std::pair<int, bool>>& soundtrack_tracks(GameModule* module, int variant,
+                                                             const std::vector<const std::vector<uint8_t>*>& roms,
                                                              const SoundtrackPack& pack) {
     static std::map<std::wstring, std::map<int, std::pair<int, bool>>> cache;
-    const std::wstring key = pack.patch + L"|" + std::to_wstring(rom.size());   // (a game's releases differ in size)
+    const std::wstring key = pack.patch + L"|" + std::to_wstring(variant);   // (a game's releases differ)
     auto it = cache.find(key);
     if (it != cache.end()) return it->second;
     std::map<int, std::pair<int, bool>>& out = cache[key];
     std::vector<uint8_t> patched;
     std::string err;
-    if (!apply_rom_patch(rom, pack.patch, patched, err)) return out;
-    std::unique_ptr<MegaDrive> md(new MegaDrive);
-    if (!md->load_rom(patched)) return out;
-    module->jukebox_boot(*md);
-    bool unlocked = false;
-    int cmd = 0;
-    md->on_cart_write = [&](MegaDrive&, uint32_t a, uint16_t v, int size) {
-        if (size != 2) return;
-        if (a == 0x3F7FA) unlocked = v == 0xCD54;
-        else if (a == 0x3F7FE && unlocked && ((v >> 8) == 0x11 || (v >> 8) == 0x12)) cmd = v;   // play once / looped
-    };
-    for (const SoundEntry& e : module->sounds()) {
-        if (!e.music) continue;
-        cmd = 0;
-        if (!module->music_request(*md, e.id)) break;
-        if (cmd & 0xFF) out[e.id] = {cmd & 0xFF, (cmd >> 8) == 0x12};
-    }
+    if (soundtrack_rom(module, variant, roms, pack, patched, err)) out = soundtrack_track_map(module, patched);
     return out;
 }
 
@@ -47,7 +32,8 @@ std::string clock_text(double s) {
 }  // namespace
 
 bool Jukebox::open(GameModule* module, const std::vector<uint8_t>& rom, const Settings& s, bool sfx,
-                   const std::vector<SoundtrackPack>& packs) {
+                   const std::vector<SoundtrackPack>& packs, int variant,
+                   const std::vector<const std::vector<uint8_t>*>& roms) {
     close();
     module_ = module;
     sfx_ = sfx;
@@ -80,7 +66,7 @@ bool Jukebox::open(GameModule* module, const std::vector<uint8_t>& rom, const Se
             if (p.game_id != module->id()) continue;
             Version v;
             v.pack = p;
-            v.tracks = soundtrack_tracks(module, rom, p);
+            v.tracks = soundtrack_tracks(module, variant, roms.empty() ? std::vector<const std::vector<uint8_t>*>{&rom} : roms, p);
             if (v.tracks.empty()) continue;
             for (const auto& t : soundtrack_track_names(p)) {
                 bool named = false;

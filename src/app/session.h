@@ -26,6 +26,9 @@ public:
 
     // Applies video/audio/cheat settings. Safe to call at any time between frames.
     void apply_settings(const Settings& s);
+    // The console's region (the version register's "overseas" bit): taken at the next power-on, like a real console's.
+    void set_region(bool overseas) { overseas_ = overseas; }
+    bool region_pending() const;
     void power_on();
     void soft_reset();
     bool start_level(int index, int variant = 0);
@@ -57,6 +60,10 @@ private:
     void switch_config();
     void try_switch();
     FrameInfo info_;
+    bool overseas_ = true;
+  public:
+    void game_hotkey(int id);   // GameModule::hotkey for the running game
+  private:
     uint32_t lut_[2048];
     std::vector<uint32_t> pixels_;
     AudioMixer mixer_;
@@ -68,5 +75,7 @@ private:
     int    dim_l_ = 0, dim_r_ = 0;           // dimmed scenery strips (FrameInfo::dim_left / dim_right)
     bool   pillar_below_ = false;
     bool   configured_ = false;
+    bool   swap_req_ = false, swap_active_ = false;   // World of Illusion's character swap: asked for / in force (taken at a reset)
+    void   sync_swap();
     Settings last_;
 };

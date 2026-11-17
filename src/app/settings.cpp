@@ -1,6 +1,7 @@
 #include "settings.h"
 #include "../platform/input.h"
 #include "../platform/keys.h"
+#include "../platform/video.h"
 #include "sys.h"
 #include <cstdio>
 #include <cstdlib>
@@ -9,7 +10,8 @@
 #include <vector>
 
 static const char* kActionKeys[ACT_COUNT] = {"up", "down", "left", "right", "a", "b", "c", "start"};
-static const char* kHotkeyKeys[HK_COUNT] = {"fast_forward", "rewind", "menu", "quick_save", "quick_load", "screenshot"};
+static const char* kHotkeyKeys[HK_COUNT] = {"fast_forward", "rewind", "menu", "quick_save", "quick_load", "screenshot",
+                                             "weapon_next", "weapon_prev"};
 
 Settings::Settings() { reset_keys(); }
 
@@ -49,6 +51,10 @@ void Settings::reset_keys() {
     hotkey_pads[HK_LOAD_STATE] = 0;
     hotkey_keys[HK_SCREENSHOT] = VK_F12;
     hotkey_pads[HK_SCREENSHOT] = 0;
+    hotkey_keys[HK_WEAPON_NEXT] = 'S';   // (QuackShot, when "Cycle weapons with button press" is on)
+    hotkey_pads[HK_WEAPON_NEXT] = PAD_RB;
+    hotkey_keys[HK_WEAPON_PREV] = 'A';
+    hotkey_pads[HK_WEAPON_PREV] = PAD_LB;
 }
 
 int resolve_player_pad(const int pad_index[2], const bool* connected, int slots, int player) {
@@ -90,6 +96,11 @@ const char* audio_filter_name(AudioFilter f) {
     static const char* n[] = {"Off (raw)", "Model 1 (warm)", "Model 2 (bright)"};
     int i = (int)f;
     return i >= 0 && i < (int)AudioFilter::Count ? n[i] : "?";
+}
+const char* plunger_color_name(int i) {
+    static const char* n[kPlungerColorCount] = {"Yellow", "Red", "Green", "Blue", "Purple", "Pink", "Light Blue",
+                                                "Light Purple", "Light Green", "White", "Brown", "Grey"};
+    return i >= 0 && i < kPlungerColorCount ? n[i] : "?";
 }
 const char* action_name(int act) {
     static const char* n[] = {"Up", "Down", "Left", "Right", "A", "B", "C", "Start"};
@@ -133,7 +144,7 @@ bool Settings::load(const std::wstring& path) {
             else if (k == "monitor") monitor = v;
             else if (k == "window_scale") window_scale = clampi(iv, 1, 8);
             else if (k == "vsync") vsync = iv != 0;
-            else if (k == "filter") filter = clampi(iv, 0, 4);
+            else if (k == "filter") filter = clampi(iv, 0, (int)ScaleFilter::Count - 1);
             else if (k == "widescreen") widescreen = (WideMode)clampi(iv, 0, (int)WideMode::Count - 1);
             else if (k == "aspect") aspect = (AspectMode)clampi(iv, 0, (int)AspectMode::Count - 1);
             else if (k == "integer_scale") integer_scale = iv != 0;
@@ -143,6 +154,18 @@ bool Settings::load(const std::wstring& path) {
             else if (k == "gamma") gamma = clampi(iv, -50, 50);
             else if (k == "no_sprite_limit") no_sprite_limit = iv != 0;
             else if (k == "hud_anchor") hud_anchor = iv != 0;
+            else if (k == "fix_behind_spawns") fix_behind_spawns = iv != 0;
+            else if (k == "video_thread") video_thread = iv != 0;
+            else if (k == "region") region = iv == 1 ? 1 : 0;
+            else if (k == "fix_slowdown") fix_slowdown = iv != 0;
+            else if (k == "woi_slowdown") woi_slowdown = iv != 0;
+            else if (k == "woi_swap") woi_swap = iv != 0;
+            else if (k == "weapon_cycle") weapon_cycle = iv != 0;
+            else if (k == "level_start") level_start = iv != 0;
+            else if (k == "more_bubbles") more_bubbles = iv != 0;
+            else if (k == "plunger_yellow") plunger_color[0] = clampi(iv, 0, kPlungerColorCount - 1);
+            else if (k == "plunger_red") plunger_color[1] = clampi(iv, 0, kPlungerColorCount - 1);
+            else if (k == "plunger_green") plunger_color[2] = clampi(iv, 0, kPlungerColorCount - 1);
             else if (k == "show_fps") show_fps = iv != 0;
             else if (k == "black_frames") black_frames = iv != 0;
         } else if (section == "audio") {
@@ -188,7 +211,7 @@ bool Settings::save(const std::wstring& path) const {
       << "\nfilter=" << filter << "\nwidescreen=" << (int)widescreen << "\naspect=" << (int)aspect
       << "\ninteger_scale=" << integer_scale << "\ncolor=" << (int)color << "\nbrightness=" << brightness
       << "\nsaturation=" << saturation << "\ngamma=" << gamma << "\nno_sprite_limit=" << no_sprite_limit
-      << "\nhud_anchor=" << hud_anchor << "\nshow_fps=" << show_fps << "\nblack_frames=" << black_frames << "\n\n[audio]\n"
+      << "\nhud_anchor=" << hud_anchor << "\nfix_behind_spawns=" << fix_behind_spawns << "\nvideo_thread=" << video_thread << "\nregion=" << region << "\nfix_slowdown=" << fix_slowdown << "\nwoi_slowdown=" << woi_slowdown << "\nwoi_swap=" << woi_swap << "\nweapon_cycle=" << weapon_cycle << "\nlevel_start=" << level_start << "\nmore_bubbles=" << more_bubbles << "\nplunger_yellow=" << plunger_color[0] << "\nplunger_red=" << plunger_color[1] << "\nplunger_green=" << plunger_color[2] << "\nshow_fps=" << show_fps << "\nblack_frames=" << black_frames << "\n\n[audio]\n"
       << "volume=" << volume << "\nmusic_volume=" << music_volume << "\nfilter=" << (int)audio_filter
       << "\nladder_effect=" << ladder_effect << "\nsoundtrack_volume=" << soundtrack_volume
       << "\ncpu_overclock=" << cpu_overclock << "\n";

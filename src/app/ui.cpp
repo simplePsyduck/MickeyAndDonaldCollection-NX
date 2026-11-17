@@ -100,7 +100,8 @@ void Menu::update(const UiInput& in) {
             if (in.key_pressed == 0x1B) { capture_ = false; return; }   // Esc cancels
             if (in.pad_pressed) {
                 uint32_t b = in.pad_pressed & (~in.pad_pressed + 1);     // lowest set bit
-                if (it.on_bind) it.on_bind(0, b);
+                if (capture_add_ && it.on_bind_add) it.on_bind_add(b);
+                else if (it.on_bind) it.on_bind(0, b);
                 capture_ = false;
             }
         } else if (in.key_pressed) {
@@ -142,7 +143,8 @@ void Menu::update(const UiInput& in) {
         break;
     }
     case MenuItem::Bind:
-        if (in.confirm) { capture_ = true; capture_block_ = 2; }
+        if (in.confirm) { capture_ = true; capture_add_ = false; capture_block_ = 2; }
+        else if (in.alt && it.bind_pad && it.on_bind_add) { capture_ = true; capture_add_ = true; capture_block_ = 2; }
         break;
     default: break;
     }
@@ -311,7 +313,7 @@ void Menu::draw(Video& v, float time) {
             break;
         }
         case MenuItem::Bind:
-            val = capture_ && sel ? (it.bind_pad ? "Press a button\xE2\x80\xA6" : "Press a key\xE2\x80\xA6") :
+            val = capture_ && sel ? (it.bind_pad ? (capture_add_ ? "Press a button to add\xE2\x80\xA6" : "Press a button\xE2\x80\xA6") : "Press a key\xE2\x80\xA6") :
                   (it.value_text ? it.value_text() : "");
             if (capture_ && sel) vcol = accent;
             break;

@@ -48,8 +48,11 @@ class Jukebox {
 public:
     // `packs`: the MD+ soundtracks found; the Music Player offers this game's as versions of the music, starting
     // with the one the game is set to play (Settings::soundtrack).
+    // `variant`: the release being played; `roms`: the ROMs of all the game's releases that are there (null: not), which
+    // a pack's patch for another release is carried over from.
     bool open(GameModule* module, const std::vector<uint8_t>& rom, const Settings& s, bool sfx,
-              const std::vector<SoundtrackPack>& packs);
+              const std::vector<SoundtrackPack>& packs, int variant = 0,
+              const std::vector<const std::vector<uint8_t>*>& roms = {});
     void close();
     bool active() const { return active_; }
     void update(const UiInput& in);
@@ -277,6 +280,7 @@ private:
     std::string playing_soundtrack_;
     void scan_soundtracks();
     const SoundtrackPack* soundtrack_for(int game);   // the pack the settings choose for a game, if it's there
+    std::vector<const std::vector<uint8_t>*> variant_roms(int game);   // the ROMs of the game's releases that are there
     void reset_game();                    // Reset Game: power-on, or a fresh start when the soundtrack changed
     void back_to_launcher();
     void run_game_frames(int count, bool audio);
@@ -292,6 +296,7 @@ private:
     MenuPage audio_page();
     MenuPage controls_page(int player);
     MenuPage cheats_page();
+    MenuPage enhancements_page();   // QuackShot
     MenuPage level_page();
     void open_jukebox(int game, bool sfx);
     void quick_save();

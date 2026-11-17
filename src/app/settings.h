@@ -23,7 +23,9 @@ enum class AudioFilter : int { Off = 0, Model1, Model2, Count };
 // Mega Drive pad actions (bindable).
 enum MdAction : int { ACT_UP = 0, ACT_DOWN, ACT_LEFT, ACT_RIGHT, ACT_A, ACT_B, ACT_C, ACT_START, ACT_COUNT };
 // For whoever presses them: fast forward and rewind are held, the others pressed.
-enum Hotkey : int { HK_FAST_FORWARD = 0, HK_REWIND, HK_MENU, HK_SAVE_STATE, HK_LOAD_STATE, HK_SCREENSHOT, HK_COUNT };
+// (HK_WEAPON_*: QuackShot's "Cycle weapons with button press", bound on its Enhancements page)
+enum Hotkey : int { HK_FAST_FORWARD = 0, HK_REWIND, HK_MENU, HK_SAVE_STATE, HK_LOAD_STATE, HK_SCREENSHOT,
+                    HK_WEAPON_NEXT, HK_WEAPON_PREV, HK_COUNT };
 
 struct Settings {
     // Video
@@ -41,6 +43,16 @@ struct Settings {
     int         gamma = 0;                  // -50..50
     bool        no_sprite_limit = true;     // removes flicker (sprites per line)
     bool        hud_anchor = true;          // re-anchor HUD to the screen edges in widescreen
+    int         region = 0;                 // emulated console: 0 North America, 1 Japan (read at power-on)
+    bool        video_thread = false;       // draw the picture on a second CPU core (MegaDrive::set_video_thread)
+    bool        fix_behind_spawns = false;
+    bool        fix_slowdown = false;       // QuackShot enhancements: the CPU at 400% (CPU Overclock's top step)
+    bool        woi_slowdown = false;       // World of Illusion enhancements: the CPU at 200%, whatever CPU Overclock says
+    bool        woi_swap = false;           //   Mickey and Donald swap their art (read at reset)
+    bool        weapon_cycle = false;       //   HK_WEAPON_NEXT / HK_WEAPON_PREV change the weapon in play
+    bool        level_start = false;
+    bool        more_bubbles = false;       //   up to 6 bubble gum shots at a time instead of 1        //   ... and on the world map arm a start from the level's beginning  // QuackShot: enemies that spawn behind the player wait until outside the wide view
+    int         plunger_color[3] = {0, 1, 2};   // QuackShot: colour of the yellow / red / green plunger (index into plunger_color_name; default = its own)
     bool        show_fps = false;
     bool        black_frames = false;       // black frame insertion (120 / 180 / 240 Hz displays)
 
@@ -101,4 +113,6 @@ const char* color_mode_name(ColorMode m);
 const char* wide_mode_name(WideMode m);
 const char* aspect_mode_name(AspectMode m);
 const char* audio_filter_name(AudioFilter f);
+constexpr int kPlungerColorCount = 12;
+const char* plunger_color_name(int i);   // Yellow, Red, Green, Blue, Purple, Pink, Light Blue, Light Purple, Light Green, White, Brown, Grey
 const char* action_name(int act);

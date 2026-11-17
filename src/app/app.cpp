@@ -19,6 +19,12 @@ static Settings preview_settings(const Settings& s) {
     p.widescreen = WideMode::Off;
     p.cheats.clear();
     p.cpu_overclock = 100;   // (the previews stay stock: three machines run at once)
+    p.fix_behind_spawns = false;
+    p.fix_slowdown = false;
+    p.woi_slowdown = false;
+    p.woi_swap = false;
+    p.plunger_color[0] = 0; p.plunger_color[1] = 1; p.plunger_color[2] = 2;
+    p.video_thread = false;   // (one extra thread, for the game being played)
     p.volume = s.volume * 55 / 100;
     return p;
 }
@@ -67,6 +73,7 @@ UiInput App::poll_ui(float dt) {
         if (p.buttons & (PAD_RIGHT | PAD_LS_RIGHT)) dir[3] = true;
         if (p.pressed & PAD_A) u.confirm = true;
         if (p.pressed & PAD_B) u.back = true;
+        if (p.pressed & PAD_X) u.alt = true;
         if (p.pressed & PAD_GUIDE) u.menu = true;   // (the Menu pad button: hotkey_pressed below)
         if (p.pressed & PAD_LB) u.page_left = true;
         if (p.pressed & PAD_RB) u.page_right = true;
@@ -144,6 +151,7 @@ void App::bind_hotkey_pad(int h, uint32_t button) {
     for (int q = 0; q < 2; q++)
         for (int a = 0; a < ACT_COUNT; a++)
             if (settings_.pad_buttons[q][a] == button) settings_.pad_buttons[q][a] = old;
+            else settings_.pad_buttons[q][a] &= ~button;   // (one of several buttons for that action)
     for (int g = 0; g < HK_COUNT; g++)
         if (g != h && settings_.hotkey_pads[g] == button) settings_.hotkey_pads[g] = old;
     settings_.hotkey_pads[h] = button;
@@ -309,6 +317,10 @@ void App::frame(double dt) {
         } else {
             if (hotkey_pressed(HK_SAVE_STATE)) quick_save();
             if (hotkey_pressed(HK_LOAD_STATE)) quick_load();
+            if ((settings_.weapon_cycle || settings_.level_start) && !block_game_input_ && !rewinding_) {   // QuackShot (other games ignore it)
+                if (hotkey_pressed(HK_WEAPON_NEXT)) session_->game_hotkey(0);
+                if (hotkey_pressed(HK_WEAPON_PREV)) session_->game_hotkey(1);
+            }
             if (block_game_input_ && !any_game_button_held()) block_game_input_ = false;
             if (rewinding_) rewind_step(dt);
             else run_game_frames(frames, true);
@@ -466,7 +478,7 @@ void App::run_script() {
             int v = atoi(s.arg.c_str() + eq + 1);
             if (k == "widescreen") settings_.widescreen = (WideMode)std::clamp(v, 0, (int)WideMode::Count - 1);
             else if (k == "color") settings_.color = (ColorMode)std::clamp(v, 0, (int)ColorMode::Count - 1);
-            else if (k == "filter") settings_.filter = std::clamp(v, 0, 4);
+            else if (k == "filter") settings_.filter = std::clamp(v, 0, (int)ScaleFilter::Count - 1);
             else if (k == "hud_anchor") settings_.hud_anchor = v != 0;
             else if (k == "black_frames") settings_.black_frames = v != 0;
             else if (k == "refresh") test_refresh_ = v;
@@ -617,14 +629,20 @@ const SoundtrackPack* App::soundtrack_for(int g) {
     auto it = settings_.soundtrack.find(games_[g].module->id());
     if (it == settings_.soundtrack.end() || it->second.empty()) return nullptr;
     // A game with several releases: a .bps pack goes with the release it names, an .ips pack (which doesn't say) with the first.
-    const GameSlot& gs = games_[g];
-    const std::vector<RomVariant> variants = gs.module->rom_variants();
+    GameSlot& gs = games_[g];
     for (const SoundtrackPack& p : soundtracks_) {
         if (p.game_id != it->first || p.name != it->second) continue;
-        if (variants.size() > 1 && (p.rom_crc ? p.rom_crc != variants[gs.variant].crc : gs.variant != 0)) return nullptr;
+        if (gs.roms.size() > 1 && !soundtrack_fits(gs.module.get(), gs.variant, variant_roms(g), p)) return nullptr;
         return &p;
     }
     return nullptr;
+}
+
+// The ROMs of a game's releases that are there, by release (what a pack's patch can be carried over from)
+std::vector<const std::vector<uint8_t>*> App::variant_roms(int g) {
+    std::vector<const std::vector<uint8_t>*> roms;
+    for (const RomMatch& r : games_[g].roms) roms.push_back(r.found ? &r.data : nullptr);
+    return roms;
 }
 
 void App::reset_game() {
@@ -651,6 +669,7 @@ void App::launch(int g, int variant) {
     }
     if (gs.roms.size() > 1) settings_.variant[gs.module->id()] = gs.variant;   // the next prompt starts on it
     session_ = std::make_unique<Session>();
+    session_->set_region(settings_.region == 0);
     rewind_.clear();
     session_->set_audio_rate(48000);
     // An MD+ soundtrack: the game runs the pack's patched ROM (in memory) and the pack plays the music it asks for.
@@ -658,9 +677,16 @@ void App::launch(int g, int variant) {
     const SoundtrackPack* pack = soundtrack_for(g);
     std::vector<uint8_t> patched;
     std::string err;
-    if (pack && !apply_rom_patch(games_[g].rom.data, pack->patch, patched, err)) {
+    if (pack && !soundtrack_rom(games_[g].module.get(), games_[g].variant, variant_roms(g), *pack, patched, err)) {
         menu_.toast("Soundtrack not used: " + err, 4.0f);
         pack = nullptr;
+    }
+    if (!pack && games_[g].roms.size() > 1) {   // chosen, but made for the other release
+        const auto want = settings_.soundtrack.find(games_[g].module->id());
+        if (want != settings_.soundtrack.end() && !want->second.empty() && err.empty())
+            for (const SoundtrackPack& p : soundtracks_)
+                if (p.game_id == want->first && p.name == want->second)
+                    menu_.toast("Soundtrack not used: it has no patch for " + games_[g].module->rom_variants()[games_[g].variant].label, 4.0f);
     }
     session_->open(games_[g].module.get(), pack ? patched : games_[g].rom.data);
     if (pack && !session_->attach_soundtrack(*pack, err)) {

@@ -37,10 +37,29 @@ void Session::apply_settings(const Settings& s) {
         auto g = s.cheats.find(module_->id());
         if (g != s.cheats.end()) c.cheats = g->second;
     }
+    // QuackShot's "enemies that spawn behind the player" fix: a game option, not a cheat (it stays available with
+    // achievements on), carried in the same map so that save states record it (it changes the ROM's code)
+    if (module_ && std::string(module_->id()) == "qs" && s.fix_behind_spawns) c.cheats["spawn_fix"] = true;
+    if (module_ && std::string(module_->id()) == "qs" && s.weapon_cycle) c.cheats["weapon_cycle"] = true;
+    if (module_ && std::string(module_->id()) == "qs" && s.level_start) c.cheats["level_start"] = true;
+    if (module_ && std::string(module_->id()) == "qs" && s.more_bubbles) c.cheats["more_bubbles"] = true;
+    // QuackShot's plunger colours (an option like the above): a colour other than the plunger's own is carried as the
+    // key "plunger<type>_<colour>" (type 0 yellow, 1 red, 2 green), which save states record too
+    if (module_ && std::string(module_->id()) == "qs")
+        for (int t = 0; t < 3; t++)
+            if (s.plunger_color[t] != t) c.cheats["plunger" + std::to_string(t) + "_" + std::to_string(s.plunger_color[t])] = true;
+    swap_req_ = module_ && std::string(module_->id()) == "woi" && s.woi_swap;
+    if (swap_active_) c.cheats["swap_chars"] = true;
     want_ = c;
     md_->vdp.sprite_limit = !s.no_sprite_limit;
     md_->ym.ladder_effect = s.ladder_effect;
-    md_->cpu_percent = kOverclockSteps[overclock_index(s.cpu_overclock)];
+    // (QuackShot's "Fix slowdown" enhancement: the top overclock step, whatever CPU Overclock says)
+    const bool qs = module_ && std::string(module_->id()) == "qs";
+    const bool woi = module_ && std::string(module_->id()) == "woi";
+    md_->cpu_percent = qs && s.fix_slowdown ? kOverclockSteps[kOverclockCount - 1]
+                     : woi && s.woi_slowdown ? 200 : kOverclockSteps[overclock_index(s.cpu_overclock)];
+    md_->set_video_thread(s.video_thread);
+    overseas_ = s.region == 0;
     soundtrack_gain_ = s.volume / 100.0f * s.soundtrack_volume / 100.0f;
     mixer_.configure(md_->sample_rate(), out_rate_, s.audio_filter, s.volume / 100.0f * (module_ ? module_->audio_gain() : 1.0f));
     if (!configured_) switch_config();
@@ -64,7 +83,17 @@ void Session::try_switch() {
     else pending_ = true;
 }
 
+bool Session::region_pending() const { return md_->overseas != overseas_; }
+
+// The character swap changes the art chosen when a level loads, so it only follows the setting at a reset.
+void Session::sync_swap() {
+    swap_active_ = swap_req_;
+    if (swap_active_) want_.cheats["swap_chars"] = true; else want_.cheats.erase("swap_chars");
+}
+
 void Session::power_on() {
+    sync_swap();
+    md_->overseas = overseas_;
     md_->power_on();
     mixer_.reset();
     if (mdplus_) mdplus_->stop();
@@ -73,6 +102,8 @@ void Session::power_on() {
 }
 
 void Session::soft_reset() {
+    sync_swap();
+    if (configured_) try_switch();
     md_->soft_reset();
 }
 
@@ -80,6 +111,7 @@ bool Session::start_level(int index, int variant) {
     if (!module_) return false;
     // (the soundtrack stops first: the level's music is asked for during the start-up frames)
     if (mdplus_) mdplus_->stop();
+    sync_swap();
     bool ok = module_->start_level(*md_, want_, index, variant);   // starts from power-on
     switch_config();
     mixer_.reset();
@@ -211,11 +243,17 @@ bool Session::load_state(const std::vector<uint8_t>& data, std::string* extra) {
             a = b + 1;
         }
     }
+    swap_active_ = saved.cheats.count("swap_chars") > 0;   // (a state keeps the swap it was saved with)
     const GameConfig want = want_;
     want_ = saved;
     switch_config();
     want_ = want;
+    if (swap_active_) want_.cheats["swap_chars"] = true; else want_.cheats.erase("swap_chars");
     try_switch();
     mixer_.reset();
     return true;
+}
+
+void Session::game_hotkey(int id) {
+    if (module_ && md_) module_->hotkey(*md_, config(), id);
 }
