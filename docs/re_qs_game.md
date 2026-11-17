@@ -537,3 +537,39 @@ Results of `python tools/re/qs_game_sound.py` (from Duckburg gameplay, tick enab
   values.
 - **No save and no password.** The only persistence is `$FCA0` (items at the last map visit), used by
   continues. OPTIONS survive a game over (RAM above `$FCFF` is not cleared) but not a reset.
+
+## Weapon change in play (app hotkey)
+
+`QsModule::hotkey` (the "Cycle weapons with button press" enhancement): in mode 5 with `$FF1A` = 1, `$8F66` goes to
+the next / previous of 0, 1 and (with `$EEE7` set) 2, and bit 0 of `$EE5B` is set so the status bar redraws the
+weapon and its count. Shots already in flight are unaffected; the pause menu shows the new choice.
+
+## Start from the first entry ("Play levels from beginning")
+
+`QsModule::hotkey` on the idle map (`$A344` = 1) toggles `module_state[5]` bit 1; `from_start_frame` (post_frame) then
+- shows it: palette 0 colours 2-4 (the name label's border, the markers) purple instead of green;
+- from the departure until play begins holds `$8F74` at 0 (the location's first area: Mexico's town, the Viking
+  ship's deck 1 - not `$475C[loc]`, 2 there) and sets `FROM_START_FLAG` (`bra.s`) in the
+  routine mode 4's "is the location cleared" test now calls (`$46CC` -> code + `$8A0`): that one test answers "no",
+  so the return entry is not swapped in. The cleared flag `$EEC0 + loc - 1` is never touched: the plane pickup flag
+  stands (an earlier version cleared the flag during the load, and the flag was gone - no CALL THE AIRPLANE);
+- on the first frame of play disarms.
+Check (REV 01, Duckburg, cleared): armed entry 0, Donald at x 61; at the flag's place `$EE5C` is set as usual.
+
+## Weapon change in play: the shots' art
+
+Popcorn and bubble gum shots use the same tiles (VRAM `$FC20`). The pause menu loads the chosen weapon's art when it
+changes the weapon (`$D34`: trap #1 with `$21000000` popcorn / `$22000000` bubble gum; mode 4 does the same at a
+level load, `$46B8`). trap #1 (`$17B2` / `$17FE`) takes up to 4 art numbers, one per byte: entry n of the table at the
+handler's `lea d16(pc)` (+ `$E`) minus 8 is a VDP write command and a Nemesis source, unpacked by `$222C` straight to
+VRAM. `QsModule::load_art` does the same natively (`nemesis()`) after a hotkey change. Checked against the game's own
+load on both releases (popcorn and bubble gum, byte for byte).
+
+## More bubble gum shots ("Shoot more bubbles")
+
+"Can fire" (`$515C`) dispatches on the weapon: plunger `$5174` (a free one of `$9C00`-`$9D40`), popcorn `$518C` (all
+of `$9D80`-`$9E80` free, ammo `$8F90`), bubble gum `$51B4` (ammo `$8F92`, slot `$9D80` free). The shot code
+(`$509E`: plunger `$50B0`, popcorn `$50E4` - a `$64` at `$9D80` that bursts into kernels -, bubble gum `$5118`, a `$65`)
+makes the gum shot in the a1 the test handed back. With the option, `$51BA` calls `MORE_BUBBLES_AT` (code + `$8C0`),
+which looks for a free one of `$9D40` and `$9D80`-`$9E80`. Check: 6 at once on both releases; popcorn and plunger
+as before.

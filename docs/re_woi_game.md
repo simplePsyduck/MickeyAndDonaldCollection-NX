@@ -573,3 +573,12 @@ so the sequence is deterministic from power-on; the demo clears the seed.
 | `$FFFD78` | current room exit handler (word, code address) |
 | `$FFFD94` | respawn point table pointer (2P) |
 | `$FFA81D` | story book chapter |
+
+## Enhancements menu (character swap, slowdown)
+
+* **Remove slowdown** - the Session sets the emulated CPU to 200% (overrides CPU Overclock).
+* **Swap Mickey & Donald's levels** (cheat key `swap_chars`, taken only at a reset): the player init at `$BD82`
+  picks anim table `$20`, tile table `$64`, `$68` and base tile `$A` from `$33`; the patch jumps to `$0FFD00`,
+  which tests `$33 xor 1` instead, so logic (`$33`) is untouched and only the art swaps. Donald's anim table has
+  no entries for `$32,$33,$36-$39` (Mickey's flying states); the lookup at `$CA5A` is wrapped (`$0FFD20`) so a
+  zero offset falls back to state 0. Voices swap too (the Mickey/Donald pick at `$BDEA` and `$7B28` is inverted, `bne`->`beq`); the HUD icon still follows the player.
