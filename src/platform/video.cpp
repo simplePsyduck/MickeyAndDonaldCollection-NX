@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstring>
 #include <numeric>
+#include <string>
 #include <vector>
 #include "video.h"
 
@@ -133,7 +134,65 @@ float4 ps_overlay(OvOut i) : SV_Target {
 }
 )HLSL";
 
-const char* const kGamePS[(int)ScaleFilter::Count] = { "ps_nearest", "ps_sharp", "ps_bilinear", "ps_scanlines", "ps_crt" };
+// The pixel-art scalers (Scale2x, Scale4x, xBR), the same as in video_gles.cpp's GLSL (see there for how they work).
+// Kept apart from kHlsl and compiled only for their own shaders, so that a fault here can only cost these filters.
+const char kHlslScalers[] = R"HLSL(
+int2 half_of(int2 a) { return int2(floor(float2(a) * 0.5)); }
+float3 tex_at(int2 c) { return fetch(float2(c) + 0.5); }
+float3 epx_quarter(float3 E, float3 B, float3 D, float3 F, float3 H, int2 sub) {
+    float3 P = sub.y == 0 ? B : H, Q = sub.x == 0 ? D : F, R = sub.x == 0 ? F : D, S = sub.y == 0 ? H : B;
+    return (all(Q == P) && any(P != R) && any(Q != S)) ? Q : E;
+}
+float3 epx2(int2 q) {
+    int2 c = half_of(q), sub = q - 2 * c;
+    return epx_quarter(tex_at(c), tex_at(c + int2(0, -1)), tex_at(c + int2(-1, 0)), tex_at(c + int2(1, 0)), tex_at(c + int2(0, 1)), sub);
+}
+float3 epx4(int2 v) {
+    int2 q = half_of(v), sub = v - 2 * q;
+    return epx_quarter(epx2(q), epx2(q + int2(0, -1)), epx2(q + int2(-1, 0)), epx2(q + int2(1, 0)), epx2(q + int2(0, 1)), sub);
+}
+float xdist(float3 a, float3 b) {
+    float3 d = (a - b) * 255;
+    return 48 * abs(dot(d, float3(0.299, 0.587, 0.114))) + 7 * abs(dot(d, float3(-0.169, -0.331, 0.5)))
+         + 6 * abs(dot(d, float3(0.5, -0.419, -0.081)));
+}
+bool xsame(float3 a, float3 b) { return xdist(a, b) < 1; }
+float3 xbr(float2 p, float n) {
+    int2 c = int2(floor(p));
+    float2 u = (floor(frac(p) * n) + 0.5) / n;
+    int2 s = int2(u.x < 0.5 ? -1 : 1, u.y < 0.5 ? -1 : 1);
+    float2 q = float2(u.x < 0.5 ? 1 - u.x : u.x, u.y < 0.5 ? 1 - u.y : u.y);
+    #define NB(dx, dy) tex_at(c + int2(s.x * (dx), s.y * (dy)))
+    float3 E = NB(0, 0), B = NB(0, -1), D = NB(-1, 0), F = NB(1, 0), H = NB(0, 1);
+    float3 C = NB(1, -1), G = NB(-1, 1), I = NB(1, 1), F4 = NB(2, 0), H5 = NB(0, 2), I4 = NB(2, 1), I5 = NB(1, 2);
+    #undef NB
+    if (xsame(E, H) || xsame(E, F)) return E;
+    float e = xdist(E, C) + xdist(E, G) + xdist(I, H5) + xdist(I, F4) + 4 * xdist(H, F);
+    float i = xdist(H, D) + xdist(H, I5) + xdist(F, I4) + xdist(F, B) + 4 * xdist(E, I);
+    bool edge = e < i && ((!xsame(F, B) && !xsame(H, D)) || (xsame(E, I) && !xsame(F, I4) && !xsame(H, I5)) || xsame(E, G) || xsame(E, C));
+    if (!edge) return E;
+    float ke = xdist(F, G), ki = xdist(H, C);
+    bool shallow = (ke * 2 <= ki) && !xsame(E, G) && !xsame(D, G);
+    bool steep = (ke >= ki * 2) && !xsame(E, C) && !xsame(B, C);
+    float3 px = xdist(E, F) <= xdist(E, H) ? F : H;
+    float h = 1 / n, cover;
+    if (shallow || steep) {
+        float a = shallow ? saturate(0.5 + (q.y + 0.5 * q.x - 1) / (1.5 * h)) : 0;
+        float b = steep ? saturate(0.5 + (q.x + 0.5 * q.y - 1) / (1.5 * h)) : 0;
+        cover = max(a, b);
+    } else {
+        cover = saturate(0.5 + (q.x + q.y - 1.5) / (2 * h));
+    }
+    return lerp(E, px, cover);
+}
+float4 ps_scale2x(float4 sv : SV_Position) : SV_Target { return finish(epx2(int2(floor(src_pos(sv) * 2)))); }
+float4 ps_scale4x(float4 sv : SV_Position) : SV_Target { return finish(epx4(int2(floor(src_pos(sv) * 4)))); }
+float4 ps_xbr2x(float4 sv : SV_Position) : SV_Target { return finish(xbr(src_pos(sv), 2)); }
+float4 ps_xbr4x(float4 sv : SV_Position) : SV_Target { return finish(xbr(src_pos(sv), 4)); }
+)HLSL";
+
+const char* const kGamePS[(int)ScaleFilter::Count] = { "ps_nearest", "ps_sharp", "ps_bilinear", "ps_scanlines", "ps_crt",
+                                                      "ps_scale2x", "ps_scale4x", "ps_xbr2x", "ps_xbr4x" };
 
 struct OVert { float x, y, u, v; uint32_t col; float p[4]; float mode; };
 static_assert(sizeof(OVert) == 40, "vertex layout");
@@ -213,9 +272,11 @@ struct Video::Impl {
     std::vector<OVert> verts;
 
     // ---- setup ---------------------------------------------------------------
-    ID3DBlob* compile(const char* entry, const char* target) {
+    ID3DBlob* compile(const char* entry, const char* target, bool scalers = false) {
         ID3DBlob* code = nullptr, *err = nullptr;
-        HRESULT hr = D3DCompile(kHlsl, sizeof(kHlsl) - 1, "video.hlsl", nullptr, nullptr, entry, target,
+        std::string src = kHlsl;
+        if (scalers) src += kHlslScalers;
+        HRESULT hr = D3DCompile(src.data(), src.size(), "video.hlsl", nullptr, nullptr, entry, target,
                                 D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &err);
         if (FAILED(hr)) {
             log_error("video: shader compile failed: ");
@@ -231,7 +292,9 @@ struct Video::Impl {
         if (!blob_ps_ov) blob_ps_ov = compile("ps_overlay", "ps_4_0");
         bool ok = blob_vs_game && blob_vs_ov && blob_ps_ov;
         for (int i = 0; i < (int)ScaleFilter::Count; i++) {
-            if (!blob_ps_game[i]) blob_ps_game[i] = compile(kGamePS[i], "ps_4_0");
+            const bool scaler = i >= (int)ScaleFilter::Scale2x;
+            if (!blob_ps_game[i]) blob_ps_game[i] = compile(kGamePS[i], "ps_4_0", scaler);
+            if (!blob_ps_game[i] && scaler) blob_ps_game[i] = compile(kGamePS[0], "ps_4_0");   // (a fault in a scaler costs only it)
             ok = ok && blob_ps_game[i];
         }
         return ok;

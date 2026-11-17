@@ -12,6 +12,10 @@ enum class ScaleFilter : int {
     Bilinear,        // smooth
     Scanlines,       // sharp + horizontal scanline darkening
     CRT,             // aperture-grille style mask + scanlines + slight bloom
+    Scale2x,         // pixel-art scaler (EPX / Scale2x): 2x, corners of diagonal edges smoothed
+    Scale4x,         // Scale2x applied twice: 4x
+    Xbr2x,           // xBR-style edge-directed scaler, 2x
+    Xbr4x,           // xBR-style edge-directed scaler, 4x (finer slopes)
     Count
 };
 
