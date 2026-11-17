@@ -2,6 +2,14 @@
 #include "md.h"
 #include <cstring>
 #include <algorithm>
+#include <atomic>
+#ifdef __SWITCH__
+#include <switch.h>
+#else
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#endif
 
 // ---------------------------------------------------------------------------
 // Callback trampolines
@@ -47,7 +55,105 @@ MegaDrive::MegaDrive() {
     audio.reserve(4096);
 }
 
-MegaDrive::~MegaDrive() {}
+// ---------------------------------------------------------------------------
+// Video thread: one scanline at a time is handed to a second thread.
+// job: 0 = idle, 1 = a line is waiting or being drawn. Both sides spin while the other is busy for a few tens of
+// microseconds (a line of CPU emulation / a line of rendering); the worker goes to sleep when nothing comes for a
+// while (vertical blank, a paused game, the menu) so that it doesn't keep a core busy for nothing.
+// ---------------------------------------------------------------------------
+struct MegaDrive::LineWorker {
+    VDP& vdp;
+    std::atomic<int> job{0};
+    std::atomic<bool> quit{false};
+    int line = 0;
+    static constexpr int kSpins = 20000;   // ~0.1-0.2 ms of polling before sleeping
+
+    void work() {
+        int idle = 0;
+        while (!quit.load(std::memory_order_acquire)) {
+            if (job.load(std::memory_order_acquire) == 1) {
+                vdp.render_line(line);
+                job.store(0, std::memory_order_release);
+                idle = 0;
+            } else if (++idle < kSpins) {
+                VDP::cpu_relax();
+            } else {
+                nap();
+            }
+        }
+    }
+    void kick(int ln) {
+        line = ln;
+        job.store(1, std::memory_order_seq_cst);
+        wake();
+    }
+
+#ifdef __SWITCH__
+    // libnx: the thread goes on the core after the main thread's (the process may use cores 0-2), with its priority.
+    Thread thread{};
+    bool started = false;
+    static void entry(void* self) { ((LineWorker*)self)->work(); }
+    explicit LineWorker(VDP& v) : vdp(v) {
+        s32 prio = 0x2C;
+        svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+        const int core = (int)((svcGetCurrentProcessorNumber() + 1) % 3);
+        if (R_SUCCEEDED(threadCreate(&thread, entry, this, nullptr, 0x40000, prio, core))) {
+            if (R_SUCCEEDED(threadStart(&thread))) started = true;
+            else threadClose(&thread);
+        }
+    }
+    ~LineWorker() {
+        if (!started) return;
+        quit.store(true, std::memory_order_release);
+        threadWaitForExit(&thread);
+        threadClose(&thread);
+    }
+    bool ok() const { return started; }
+    void nap() { svcSleepThread(30000); }   // 30 us: polled, nothing to wake
+    void wake() {}
+#else
+    std::thread thread;
+    std::mutex m;
+    std::condition_variable cv;
+    std::atomic<bool> asleep{false};
+    explicit LineWorker(VDP& v) : vdp(v) { thread = std::thread([this]() { work(); }); }
+    ~LineWorker() {
+        quit.store(true, std::memory_order_seq_cst);
+        { std::lock_guard<std::mutex> l(m); }
+        cv.notify_all();
+        if (thread.joinable()) thread.join();
+    }
+    bool ok() const { return true; }
+    void nap() {
+        std::unique_lock<std::mutex> l(m);
+        asleep.store(true, std::memory_order_seq_cst);
+        cv.wait(l, [this]() { return job.load(std::memory_order_seq_cst) == 1 || quit.load(std::memory_order_seq_cst); });
+        asleep.store(false, std::memory_order_seq_cst);
+    }
+    void wake() {
+        if (!asleep.load(std::memory_order_seq_cst)) return;
+        { std::lock_guard<std::mutex> l(m); }
+        cv.notify_one();
+    }
+#endif
+};
+
+void MegaDrive::set_video_thread(bool on) {
+    if (on == (worker_ != nullptr)) return;
+    if (on) {
+        LineWorker* w = new LineWorker(vdp);
+        if (!w->ok()) { delete w; return; }   // no thread to be had: stay as we are
+        worker_ = w;
+        vdp.render_busy = &w->job;
+    } else {
+        vdp.wait_render();
+        vdp.render_busy = nullptr;
+        delete worker_;
+        worker_ = nullptr;
+    }
+}
+
+MegaDrive::~MegaDrive() { set_video_thread(false); }
 
 bool MegaDrive::load_rom(const std::vector<uint8_t>& data) {
     if (data.size() < 0x200) return false;
@@ -189,12 +295,16 @@ void MegaDrive::run_frame() {
     audio_frames = 0;
     vdp.pal = pal;
     for (int ln = 0; ln < lines; ln++) {
+        vdp.wait_render();   // (video thread: the line before this one is finished)
         line_start = (int64_t)ln * kMclkPerLine;
         vdp.line = ln;
         vdp.mclk_now = line_start;
         int active = vdp.active_lines();
         if (ln == 0) vdp.vblank = false;
-        if (ln < active) vdp.render_line(ln);
+        if (ln < active) {
+            if (worker_) worker_->kick(ln);
+            else vdp.render_line(ln);
+        }
         if (ln == active) {
             vdp.vblank = true;
             if (on_vblank) on_vblank(*this);
@@ -210,6 +320,7 @@ void MegaDrive::run_frame() {
         vdp.hint_line();
         run_until(line_start + kMclkPerLine);
     }
+    vdp.wait_render();
     const int64_t frame_len = (int64_t)lines * kMclkPerLine;
     sync_audio(frame_len);
     m68_clock -= frame_len;

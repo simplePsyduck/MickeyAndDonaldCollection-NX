@@ -3,6 +3,10 @@
 #pragma once
 #include <cstdint>
 #include <cstddef>
+#include <atomic>
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
 
 class VDP {
 public:
@@ -88,6 +92,23 @@ public:
     uint32_t hook_flags = 0;     // free for the installer of the hooks
 
     void render_line(int ln);   // render scanline into framebuffer
+    // Video thread (MegaDrive::set_video_thread): non-zero while another thread renders a line. The CPU ports wait
+    // for it, so the renderer always sees the chip as it was when its line began - the picture and the status
+    // flags are the same as without the thread.
+    const std::atomic<int>* render_busy = nullptr;
+    void wait_render() const {
+        if (!render_busy) return;
+        while (render_busy->load(std::memory_order_acquire)) cpu_relax();
+    }
+    static void cpu_relax() {
+#if defined(_MSC_VER)
+        _mm_pause();
+#elif defined(__aarch64__) || defined(__arm__)
+        __asm__ __volatile__("yield");
+#elif defined(__x86_64__) || defined(__i386__)
+        __builtin_ia32_pause();
+#endif
+    }
     void blank_line(int ln);    // output backdrop colour (display disabled)
 
     int  active_width() const { return (reg[12] & 0x81) ? 320 : 256; }

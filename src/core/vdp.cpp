@@ -71,6 +71,7 @@ void VDP::write_reg(int r, uint8_t v) {
 }
 
 void VDP::write_ctrl(uint16_t v) {
+    wait_render();
     if (pending) {
         pending = false;
         addr = (uint16_t)((addr & 0x3FFF) | ((v & 3) << 14));
@@ -98,6 +99,7 @@ void VDP::write_vram16(uint16_t a, uint16_t v) {
 }
 
 void VDP::write_data(uint16_t v) {
+    wait_render();
     pending = false;
     switch (code & 0x0F) {
     case 1: write_vram16(addr, v); break;
@@ -113,6 +115,7 @@ void VDP::write_data(uint16_t v) {
 }
 
 uint16_t VDP::read_data() {
+    wait_render();
     pending = false;
     uint16_t v = 0;
     switch (code & 0x0F) {
@@ -127,6 +130,7 @@ uint16_t VDP::read_data() {
 }
 
 uint16_t VDP::read_status() {
+    wait_render();
     pending = false;
     uint16_t s = 0x3400 | 0x0200;   // FIFO always empty (writes complete instantly)
     if (vint_pending) s |= 0x80;

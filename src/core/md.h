@@ -35,6 +35,13 @@ public:
     void soft_reset();
     void run_frame();
 
+    // Video thread: scanlines are drawn on a second thread (its own CPU core) while this one goes on emulating the
+    // 68000, Z80 and sound of the same line. The emulation waits for the line in progress before it touches the
+    // VDP and before it starts the next line, so the result is the same picture and the same emulation, sooner.
+    // (Game line hooks that read 68000 RAM may see it up to one scanline later than without the thread.)
+    void set_video_thread(bool on);
+    bool video_thread() const { return worker_ != nullptr; }
+
     void set_pad(int port, uint16_t buttons) { pad_buttons[port & 1] = buttons; }
 
     double sample_rate() const { return (pal ? kMclkPal : kMclkNtsc) / kMclkPerSample; }
@@ -141,4 +148,8 @@ private:
     void ym_write(int port, uint8_t v, int64_t t);
     uint8_t ym_read(int64_t t);
     static void hook_dispatch(void* ctx, uint32_t pc);
+    struct LineWorker;
+    LineWorker* worker_ = nullptr;
+    MegaDrive(const MegaDrive&) = delete;
+    MegaDrive& operator=(const MegaDrive&) = delete;
 };
