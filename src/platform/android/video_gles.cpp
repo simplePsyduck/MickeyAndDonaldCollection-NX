@@ -63,6 +63,65 @@ vec3 crt_row(float y, float px) {
 }
 )";
 
+// The pixel-art scalers (Scale2x, Scale4x, xBR): the picture is worked out N times the size of the source and every output
+// pixel takes the nearest pixel of it (as Nearest does of the source), so they are at their best at whole-number scales.
+const char* kScalerLib = R"(
+ivec2 half_of(ivec2 a) { return ivec2(floor(vec2(a) * 0.5)); }   // a / 2 rounded down (negatives too)
+vec3 tex_at(ivec2 c) { return fetch(vec2(c) + 0.5); }
+// Scale2x (EPX): a quarter of a pixel takes the colour of the two neighbours on its side when they are the same and
+// differ from the two on the far sides.
+vec3 epx_quarter(vec3 E, vec3 B, vec3 D, vec3 F, vec3 H, ivec2 sub) {
+    vec3 P = sub.y == 0 ? B : H, Q = sub.x == 0 ? D : F, R = sub.x == 0 ? F : D, S = sub.y == 0 ? H : B;
+    return (Q == P && P != R && Q != S) ? Q : E;
+}
+vec3 epx2(ivec2 q) {   // pixel q of the 2x picture
+    ivec2 c = half_of(q), sub = q - 2 * c;
+    return epx_quarter(tex_at(c), tex_at(c + ivec2(0, -1)), tex_at(c + ivec2(-1, 0)), tex_at(c + ivec2(1, 0)), tex_at(c + ivec2(0, 1)), sub);
+}
+vec3 epx4(ivec2 v) {   // pixel v of the 4x picture: Scale2x of the 2x picture
+    ivec2 q = half_of(v), sub = v - 2 * q;
+    return epx_quarter(epx2(q), epx2(q + ivec2(0, -1)), epx2(q + ivec2(-1, 0)), epx2(q + ivec2(1, 0)), epx2(q + ivec2(0, 1)), sub);
+}
+// xBR: the corner of the pixel an output pixel lies in is tested for an edge running through it, with the xBR rule
+// (the colour distances along and across the edge in the 4x3 pixels around the corner); an edge is drawn as a line
+// whose slope (45 degrees, or 2:1 either way) follows from the pixels beyond it, and the output pixel takes as much of
+// the neighbouring colour as the line covers of it. 2x and 4x differ in how fine the pixel grid it is drawn on is.
+float xdist(vec3 a, vec3 b) {
+    vec3 d = (a - b) * 255.0;
+    return 48.0 * abs(dot(d, vec3(0.299, 0.587, 0.114))) + 7.0 * abs(dot(d, vec3(-0.169, -0.331, 0.5)))
+         + 6.0 * abs(dot(d, vec3(0.5, -0.419, -0.081)));
+}
+bool xsame(vec3 a, vec3 b) { return xdist(a, b) < 1.0; }
+vec3 xbr(vec2 p, float n) {
+    ivec2 c = ivec2(floor(p));
+    vec2 u = (floor(fract(p) * n) + 0.5) / n;   // where this output pixel sits in its source pixel
+    ivec2 s = ivec2(u.x < 0.5 ? -1 : 1, u.y < 0.5 ? -1 : 1);   // towards the nearest corner
+    vec2 q = vec2(u.x < 0.5 ? 1.0 - u.x : u.x, u.y < 0.5 ? 1.0 - u.y : u.y);   // u, mirrored so that corner is bottom right
+    #define NB(dx, dy) tex_at(c + ivec2(s.x * (dx), s.y * (dy)))   // (not x / y: they would replace the .x of s.x)
+    vec3 E = NB(0, 0), B = NB(0, -1), D = NB(-1, 0), F = NB(1, 0), H = NB(0, 1);
+    vec3 C = NB(1, -1), G = NB(-1, 1), I = NB(1, 1), F4 = NB(2, 0), H5 = NB(0, 2), I4 = NB(2, 1), I5 = NB(1, 2);
+    #undef NB
+    if (xsame(E, H) || xsame(E, F)) return E;
+    float e = xdist(E, C) + xdist(E, G) + xdist(I, H5) + xdist(I, F4) + 4.0 * xdist(H, F);
+    float i = xdist(H, D) + xdist(H, I5) + xdist(F, I4) + xdist(F, B) + 4.0 * xdist(E, I);
+    bool edge = e < i && ((!xsame(F, B) && !xsame(H, D)) || (xsame(E, I) && !xsame(F, I4) && !xsame(H, I5)) || xsame(E, G) || xsame(E, C));
+    if (!edge) return E;
+    float ke = xdist(F, G), ki = xdist(H, C);
+    bool shallow = (ke * 2.0 <= ki) && !xsame(E, G) && !xsame(D, G);
+    bool steep = (ke >= ki * 2.0) && !xsame(E, C) && !xsame(B, C);
+    vec3 px = xdist(E, F) <= xdist(E, H) ? F : H;
+    float h = 1.0 / n, cover;
+    if (shallow || steep) {
+        float a = shallow ? clamp(0.5 + (q.y + 0.5 * q.x - 1.0) / (1.5 * h), 0.0, 1.0) : 0.0;
+        float b = steep ? clamp(0.5 + (q.x + 0.5 * q.y - 1.0) / (1.5 * h), 0.0, 1.0) : 0.0;
+        cover = max(a, b);
+    } else {
+        cover = clamp(0.5 + (q.x + q.y - 1.5) / (2.0 * h), 0.0, 1.0);
+    }
+    return mix(E, px, cover);
+}
+)";
+
 const char* kGamePS[(int)ScaleFilter::Count] = {
     "void main() { o_col = finish(fetch(src_pos())); }\n",
     "void main() { o_col = finish(sharp(src_pos(), max(u_scale, vec2(1.0)))); }\n",
@@ -92,6 +151,10 @@ const char* kGamePS[(int)ScaleFilter::Count] = {
     o_col = finish(pow(c, vec3(1.0 / 2.2)));
 }
 )",
+    "void main() { o_col = finish(epx2(ivec2(floor(src_pos() * 2.0)))); }\n",
+    "void main() { o_col = finish(epx4(ivec2(floor(src_pos() * 4.0)))); }\n",
+    "void main() { o_col = finish(xbr(src_pos(), 2.0)); }\n",
+    "void main() { o_col = finish(xbr(src_pos(), 4.0)); }\n",
 };
 
 const char* kOverlayVS = R"(#version 300 es
@@ -249,7 +312,7 @@ struct Video::Impl {
 
     bool create_pipeline() {
         for (int i = 0; i < (int)ScaleFilter::Count; i++) {
-            prog_game[i] = link(kGameVS, std::string(kGameCommon) + kGamePS[i]);
+            prog_game[i] = link(kGameVS, std::string(kGameCommon) + (i >= (int)ScaleFilter::Scale2x ? kScalerLib : "") + kGamePS[i]);
             if (!prog_game[i]) return false;
             GameLoc& L = gl_game[i];
             GLuint p = prog_game[i];
